@@ -1,0 +1,45 @@
+FROM golang:1.26-bookworm AS playwright-installer
+
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN go run github.com/playwright-community/playwright-go/cmd/playwright@v0.5700.1 install --with-deps chromium
+
+
+FROM debian:bookworm-slim
+ARG TARGETOS
+ARG TARGETARCH
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        ffmpeg \
+        libasound2 \
+        libatk-bridge2.0-0 \
+        libatk1.0-0 \
+        libcairo2 \
+        libcups2 \
+        libdbus-1-3 \
+        libdrm2 \
+        libgbm1 \
+        libglib2.0-0 \
+        libnspr4 \
+        libnss3 \
+        libpango-1.0-0 \
+        libx11-6 \
+        libx11-xcb1 \
+        libxcb1 \
+        libxcomposite1 \
+        libxdamage1 \
+        libxext6 \
+        libxfixes3 \
+        libxkbcommon0 \
+        libxrandr2 \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -m appuser
+
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+COPY --from=playwright-installer /ms-playwright /ms-playwright
+RUN chown -R appuser:appuser /ms-playwright
+
+COPY ${TARGETOS}/${TARGETARCH}/sponsrdownloader /usr/local/bin/sponsrdownloader
+
+USER appuser
+ENTRYPOINT ["sponsrdownloader"]
