@@ -34,7 +34,11 @@ func (c *PostsCmd) Run(globals *configuration.Globals) error {
 
 	projectID, err := sponsrClient.ProjectIDBySlug(ctx, globals.ProjectSlug)
 	if err != nil {
-		return fmt.Errorf("could not resolve project slug %q: %w", globals.ProjectSlug, err)
+		return fmt.Errorf(
+			"could not resolve project slug %q: %w",
+			globals.ProjectSlug,
+			err,
+		)
 	}
 
 	projects, err := sponsrClient.Projects(ctx, projectID)

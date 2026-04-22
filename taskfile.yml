@@ -2,11 +2,34 @@ version: "3"
 
 tasks:
   run:
-    - go run ./cmd/ {{.CLI_ARGS}}
+    desc: Run the CLI with forwarded args
+    cmds:
+      - go run ./cmd/ {{.CLI_ARGS}}
+
   lint:
-    - golangci-lint fmt
-    - golangci-lint run
+    desc: Run formatters + linters with autofix (mutates files)
+    cmds:
+      - golangci-lint fmt
+      - golangci-lint run --fix
+
+  ci:
+    desc: Read-only fmt + lint verification for CI (fail-fast)
+    cmds:
+      - golangci-lint fmt --diff
+      - golangci-lint run
+
   test:
-    - go test ./...
+    desc: Run tests
+    cmds:
+      - go test ./...
+
+  check:
+    desc: Local composite — lint (mutating) + tests
+    cmds:
+      - task: lint
+      - task: test
+
   build:
-    - goreleaser release --snapshot --clean
+    desc: Snapshot release build
+    cmds:
+      - goreleaser release --snapshot --clean

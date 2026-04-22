@@ -80,7 +80,11 @@ func sanitizeTitle(s string) string {
 }
 
 func (p *Post) Filename() string {
-	return fmt.Sprintf("%s - %s", p.Date.Format("02-01-2006"), sanitizeTitle(p.Title))
+	return fmt.Sprintf(
+		"%s - %s",
+		p.Date.Format("02-01-2006"),
+		sanitizeTitle(p.Title),
+	)
 }
 
 type Project struct {

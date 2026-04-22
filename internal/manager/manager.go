@@ -61,7 +61,10 @@ type Manager struct {
 	browser playwright.Browser
 }
 
-func NewManager(config configuration.Globals, projectTitle string) (*Manager, error) {
+func NewManager(
+	config configuration.Globals,
+	projectTitle string,
+) (*Manager, error) {
 	m, err := newManager(config, projectTitle)
 	if err != nil {
 		return nil, errors.Join(ErrManager, err)
@@ -70,8 +73,11 @@ func NewManager(config configuration.Globals, projectTitle string) (*Manager, er
 	return m, nil
 }
 
-func newManager(config configuration.Globals, projectTitle string) (_ *Manager, err error) {
-	if err = os.MkdirAll(projectTitle, 0755); err != nil {
+func newManager(
+	config configuration.Globals,
+	projectTitle string,
+) (_ *Manager, err error) {
+	if err = os.MkdirAll(projectTitle, 0o755); err != nil {
 		return nil, err
 	}
 
@@ -170,7 +176,11 @@ func (m *Manager) DownloadPDF(ctx context.Context, item Downloadable) error {
 	return nil
 }
 
-func (m *Manager) newPage(ctx context.Context, logger *slog.Logger, targetURL string) (playwright.Page, error) {
+func (m *Manager) newPage(
+	ctx context.Context,
+	logger *slog.Logger,
+	targetURL string,
+) (playwright.Page, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -178,7 +188,9 @@ func (m *Manager) newPage(ctx context.Context, logger *slog.Logger, targetURL st
 	if err != nil {
 		return nil, fmt.Errorf("could not create page: %w", err)
 	}
-	pageGotoOpts := playwright.PageGotoOptions{WaitUntil: playwright.WaitUntilStateNetworkidle}
+	pageGotoOpts := playwright.PageGotoOptions{
+		WaitUntil: playwright.WaitUntilStateNetworkidle,
+	}
 	_, err = page.Goto(targetURL, pageGotoOpts)
 	if err != nil {
 		if closeErr := page.Close(); closeErr != nil {
@@ -220,7 +232,10 @@ func (m *Manager) downloadPDF(ctx context.Context, item Downloadable) error {
 		State: playwright.LoadStateNetworkidle,
 	}
 	if err = page.WaitForLoadState(pageWaitOpts); err != nil {
-		return fmt.Errorf("could not wait for network idle after scroll: %w", err)
+		return fmt.Errorf(
+			"could not wait for network idle after scroll: %w",
+			err,
+		)
 	}
 
 	filePath := filepath.Join(m.projectTitle, item.Filename()+".pdf")
@@ -274,7 +289,9 @@ func (m *Manager) downloadVideo(ctx context.Context, item Downloadable) error {
 		}
 	})
 
-	pageGotoOpts := playwright.PageGotoOptions{WaitUntil: playwright.WaitUntilStateNetworkidle}
+	pageGotoOpts := playwright.PageGotoOptions{
+		WaitUntil: playwright.WaitUntilStateNetworkidle,
+	}
 	if _, err = page.Goto(item.URL(), pageGotoOpts); err != nil {
 		return fmt.Errorf("could not navigate to %s: %w", item.URL(), err)
 	}
@@ -291,7 +308,10 @@ func (m *Manager) downloadVideo(ctx context.Context, item Downloadable) error {
 	}
 
 	if err = kinescopeFrame.Locator(videoSelector).WaitFor(); err != nil {
-		return fmt.Errorf("could not find video element in kinescope frame: %w", err)
+		return fmt.Errorf(
+			"could not find video element in kinescope frame: %w",
+			err,
+		)
 	}
 	if _, err = kinescopeFrame.Evaluate(jsVideoPlay); err != nil {
 		return fmt.Errorf("could not trigger video playback: %w", err)
