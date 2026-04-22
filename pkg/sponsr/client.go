@@ -31,13 +31,19 @@ type Client struct {
 
 func NewClient(
 	bearerToken string, timeout time.Duration,
-	concurrencyLimit int, paginatorLimit int,
+	concurrencyLimit, paginatorLimit int,
 ) (*Client, error) {
 	if concurrencyLimit <= 0 {
-		return nil, fmt.Errorf("concurrencyLimit must be > 0, got %d", concurrencyLimit)
+		return nil, fmt.Errorf(
+			"concurrencyLimit must be > 0, got %d",
+			concurrencyLimit,
+		)
 	}
 	if paginatorLimit <= 0 {
-		return nil, fmt.Errorf("paginatorLimit must be > 0, got %d", paginatorLimit)
+		return nil, fmt.Errorf(
+			"paginatorLimit must be > 0, got %d",
+			paginatorLimit,
+		)
 	}
 	return &Client{
 		bearerToken:      bearerToken,
@@ -87,7 +93,12 @@ func getObjects[T any](
 	s *Client, ctx context.Context, objectURL string,
 	page, limit int,
 ) (*Objects[T], error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, PaginatedURL(objectURL, page, limit), nil)
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		PaginatedURL(objectURL, page, limit),
+		nil,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -126,14 +137,22 @@ func getObjects[T any](
 	return &object, nil
 }
 
-func GetObjectsAll[T any](s *Client, ctx context.Context, objectURL string) ([]T, error) {
+func GetObjectsAll[T any](
+	s *Client,
+	ctx context.Context,
+	objectURL string,
+) ([]T, error) {
 	// Fetch page 1 at full limit so its data is reused directly.
 	firstPage, err := GetObjects[T](s, ctx, objectURL, 1, s.paginatorLimit)
 	if err != nil {
 		return nil, err
 	}
 	if firstPage == nil {
-		return nil, fmt.Errorf("%w: response is nil for %s", ErrSponsrClient, objectURL)
+		return nil, fmt.Errorf(
+			"%w: response is nil for %s",
+			ErrSponsrClient,
+			objectURL,
+		)
 	}
 
 	pages := CalculatePages(firstPage.Total, s.paginatorLimit)
@@ -155,7 +174,11 @@ func GetObjectsAll[T any](s *Client, ctx context.Context, objectURL string) ([]T
 				return err
 			}
 			if resp == nil {
-				return fmt.Errorf("%w: response is nil for %s", ErrSponsrClient, objectURL)
+				return fmt.Errorf(
+					"%w: response is nil for %s",
+					ErrSponsrClient,
+					objectURL,
+				)
 			}
 			mu.Lock()
 			defer mu.Unlock()
@@ -167,7 +190,10 @@ func GetObjectsAll[T any](s *Client, ctx context.Context, objectURL string) ([]T
 	return objects, eg.Wait()
 }
 
-func (s *Client) ProjectIDBySlug(ctx context.Context, slug string) (int, error) {
+func (s *Client) ProjectIDBySlug(
+	ctx context.Context,
+	slug string,
+) (int, error) {
 	id, err := s.projectIDBySlugURL(ctx, ProjectPageURL(slug))
 	if err != nil {
 		return 0, errors.Join(ErrSponsrClient, &url.Error{
@@ -179,7 +205,10 @@ func (s *Client) ProjectIDBySlug(ctx context.Context, slug string) (int, error) 
 	return id, nil
 }
 
-func (s *Client) projectIDBySlugURL(ctx context.Context, pageURL string) (int, error) {
+func (s *Client) projectIDBySlugURL(
+	ctx context.Context,
+	pageURL string,
+) (int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
 	if err != nil {
 		return 0, err
@@ -202,16 +231,28 @@ func (s *Client) projectIDBySlugURL(ctx context.Context, pageURL string) (int, e
 	}
 	match := reProjectID.FindSubmatch(body)
 	if match == nil {
-		return 0, fmt.Errorf("project_id not found on page %s (body length: %d)", pageURL, len(body))
+		return 0, fmt.Errorf(
+			"project_id not found on page %s (body length: %d)",
+			pageURL,
+			len(body),
+		)
 	}
 	id, err := strconv.Atoi(string(match[1]))
 	if err != nil {
-		return 0, fmt.Errorf("project_id value %q on page %s is not a valid integer: %w", string(match[1]), pageURL, err)
+		return 0, fmt.Errorf(
+			"project_id value %q on page %s is not a valid integer: %w",
+			string(match[1]),
+			pageURL,
+			err,
+		)
 	}
 	return id, nil
 }
 
-func (s *Client) Projects(ctx context.Context, projectID int) ([]Project, error) {
+func (s *Client) Projects(
+	ctx context.Context,
+	projectID int,
+) ([]Project, error) {
 	return GetObjectsAll[Project](
 		s, ctx,
 		fmt.Sprintf("%s?id=%d", ProjectsEndpoint, projectID),
