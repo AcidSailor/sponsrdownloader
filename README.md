@@ -74,6 +74,8 @@ All flags can be set via environment variables.
 | `--concurrency-limit`    | `CONCURRENCY_LIMIT`    |          | `10`    | Max concurrent downloads                                                        |
 | `--timeout`              | `TIMEOUT`              |          | `30s`   | HTTP request timeout                                                            |
 | `--paginator-limit`      | `PAGINATOR_LIMIT`      |          | `20`    | API paginator limit                                                             |
+| `--request-delay`        | `REQUEST_DELAY`        |          | `250ms` | Min delay between Sponsr API requests (rate limiting; `0` disables)             |
+| `--max-retries`          | `MAX_RETRIES`          |          | `5`     | Retries on HTTP 429 (Too Many Requests), with Retry-After / backoff             |
 | `--ffmpeg-timeout`       | `FFMPEG_TIMEOUT`       |          | `2h`    | Timeout for ffmpeg video download                                               |
 
 ## Commands

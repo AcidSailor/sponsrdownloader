@@ -16,22 +16,35 @@ import (
 	"time"
 
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/time/rate"
 )
 
 var reProjectID = regexp.MustCompile(`"project_id":\s*(\d+)`)
 
 var ErrSponsrClient = errors.New("sponsr client")
 
+// retryBaseDelay is the base for exponential backoff when the Sponsr API
+// responds with 429 and provides no Retry-After header.
+const retryBaseDelay = time.Second
+
 type Client struct {
 	bearerToken      string
 	httpClient       *http.Client
 	concurrencyLimit int
 	paginatorLimit   int
+	// limiter spaces out all outgoing API requests to avoid tripping the
+	// server-side throttler; nil disables client-side rate limiting.
+	limiter *rate.Limiter
+	// maxRetries is the number of extra attempts made on HTTP 429 responses.
+	maxRetries int
+	// retryBaseDelay is the backoff base used when no Retry-After is provided.
+	retryBaseDelay time.Duration
 }
 
 func NewClient(
 	bearerToken string, timeout time.Duration,
 	concurrencyLimit, paginatorLimit int,
+	requestDelay time.Duration, maxRetries int,
 ) (*Client, error) {
 	if concurrencyLimit <= 0 {
 		return nil, fmt.Errorf(
@@ -45,12 +58,102 @@ func NewClient(
 			paginatorLimit,
 		)
 	}
+	if requestDelay < 0 {
+		return nil, fmt.Errorf(
+			"requestDelay must be >= 0, got %s",
+			requestDelay,
+		)
+	}
+	if maxRetries < 0 {
+		return nil, fmt.Errorf(
+			"maxRetries must be >= 0, got %d",
+			maxRetries,
+		)
+	}
+
+	// A burst of 1 makes the limiter enforce a minimum spacing of requestDelay
+	// between requests, even across the concurrent paginator goroutines.
+	var limiter *rate.Limiter
+	if requestDelay > 0 {
+		limiter = rate.NewLimiter(rate.Every(requestDelay), 1)
+	}
+
 	return &Client{
 		bearerToken:      bearerToken,
 		httpClient:       &http.Client{Timeout: timeout},
 		concurrencyLimit: concurrencyLimit,
 		paginatorLimit:   paginatorLimit,
+		limiter:          limiter,
+		maxRetries:       maxRetries,
+		retryBaseDelay:   retryBaseDelay,
 	}, nil
+}
+
+// doRequest executes req, applying client-side rate limiting and retrying on
+// HTTP 429 (Too Many Requests) with backoff that honors the Retry-After header.
+// It returns the response body together with the final status code. The request
+// must be idempotent and carry no body, since it is replayed on retry.
+func (s *Client) doRequest(
+	ctx context.Context,
+	req *http.Request,
+) (body []byte, status int, err error) {
+	for attempt := 0; ; attempt++ {
+		if s.limiter != nil {
+			if err := s.limiter.Wait(ctx); err != nil {
+				return nil, 0, err
+			}
+		}
+
+		resp, err := s.httpClient.Do(req)
+		if err != nil {
+			return nil, 0, err
+		}
+		body, err = io.ReadAll(resp.Body)
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			slog.Error("could not close response body", "error", closeErr)
+		}
+		if err != nil {
+			return nil, resp.StatusCode, fmt.Errorf(
+				"failed to read body: %w",
+				err,
+			)
+		}
+
+		if resp.StatusCode != http.StatusTooManyRequests ||
+			attempt >= s.maxRetries {
+			return body, resp.StatusCode, nil
+		}
+
+		wait := s.backoff(resp.Header, attempt)
+		slog.Warn(
+			"rate limited by sponsr, backing off",
+			"url", req.URL.String(),
+			"attempt", attempt+1,
+			"wait", wait,
+		)
+		select {
+		case <-ctx.Done():
+			return nil, resp.StatusCode, ctx.Err()
+		case <-time.After(wait):
+		}
+	}
+}
+
+// backoff returns how long to wait before retrying, preferring the server's
+// Retry-After header (seconds or HTTP-date form) and otherwise falling back to
+// exponential backoff based on retryBaseDelay.
+func (s *Client) backoff(h http.Header, attempt int) time.Duration {
+	if v := h.Get("Retry-After"); v != "" {
+		if secs, err := strconv.Atoi(v); err == nil && secs > 0 {
+			return time.Duration(secs) * time.Second
+		}
+		if t, err := http.ParseTime(v); err == nil {
+			if d := time.Until(t); d > 0 {
+				return d
+			}
+		}
+	}
+	return s.retryBaseDelay * time.Duration(1<<attempt)
 }
 
 func PaginatedURL(objectURL string, page, limit int) string {
@@ -110,23 +213,12 @@ func getObjects[T any](
 		req.Header.Set(k, v)
 	}
 
-	resp, err := s.httpClient.Do(req)
+	body, status, err := s.doRequest(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			slog.Error("could not close response body", "error", err)
-		}
-	}()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read body: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%d: %s", resp.StatusCode, body)
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("%d: %s", status, body)
 	}
 
 	var object Objects[T]
@@ -213,21 +305,12 @@ func (s *Client) projectIDBySlugURL(
 	if err != nil {
 		return 0, err
 	}
-	resp, err := s.httpClient.Do(req)
+	body, status, err := s.doRequest(ctx, req)
 	if err != nil {
 		return 0, err
 	}
-	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			slog.Error("could not close response body", "error", err)
-		}
-	}()
-	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("unexpected status %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return 0, fmt.Errorf("failed to read body: %w", err)
+	if status != http.StatusOK {
+		return 0, fmt.Errorf("unexpected status %d", status)
 	}
 	match := reProjectID.FindSubmatch(body)
 	if match == nil {
