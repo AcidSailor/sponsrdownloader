@@ -33,10 +33,6 @@ const retryBaseDelay = time.Second
 // overflow time.Duration at high retry counts and silently defeat backoff.
 const retryMaxDelay = 2 * time.Minute
 
-// maxBackoffShift caps the exponential shift so retryBaseDelay<<shift stays
-// well within time.Duration's range regardless of maxRetries.
-const maxBackoffShift = 30
-
 type Client struct {
 	bearerToken      string
 	httpClient       *http.Client
@@ -172,8 +168,13 @@ func (s *Client) backoff(h http.Header, attempt int) time.Duration {
 		)
 	}
 
-	shift := min(attempt, maxBackoffShift)
-	return min(s.retryBaseDelay*time.Duration(1<<shift), retryMaxDelay)
+	// Double the base per attempt, stopping as soon as the cap is reached so
+	// the multiplication can never overflow time.Duration.
+	delay := s.retryBaseDelay
+	for i := 0; i < attempt && delay < retryMaxDelay; i++ {
+		delay *= 2
+	}
+	return min(delay, retryMaxDelay)
 }
 
 // parseRetryAfter interprets a Retry-After header value in either the
