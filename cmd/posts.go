@@ -27,6 +27,8 @@ func (c *PostsCmd) Run(globals *configuration.Globals) error {
 		globals.Timeout,
 		globals.ConcurrencyLimit,
 		globals.PaginatorLimit,
+		globals.RequestDelay,
+		globals.MaxRetries,
 	)
 	if err != nil {
 		return fmt.Errorf("could not create sponsr client: %w", err)
