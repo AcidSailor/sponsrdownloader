@@ -23,9 +23,19 @@ var reProjectID = regexp.MustCompile(`"project_id":\s*(\d+)`)
 
 var ErrSponsrClient = errors.New("sponsr client")
 
-// retryBaseDelay is the base for exponential backoff when the Sponsr API
-// responds with 429 and provides no Retry-After header.
+// retryBaseDelay is the default exponential-backoff base assigned to
+// Client.retryBaseDelay when the Sponsr API responds with 429 and provides
+// no usable Retry-After header.
 const retryBaseDelay = time.Second
+
+// retryMaxDelay caps a single backoff wait. It bounds both very large
+// Retry-After values and the exponential growth, which would otherwise
+// overflow time.Duration at high retry counts and silently defeat backoff.
+const retryMaxDelay = 2 * time.Minute
+
+// maxBackoffShift caps the exponential shift so retryBaseDelay<<shift stays
+// well within time.Duration's range regardless of maxRetries.
+const maxBackoffShift = 30
 
 type Client struct {
 	bearerToken      string
@@ -119,8 +129,15 @@ func (s *Client) doRequest(
 			)
 		}
 
-		if resp.StatusCode != http.StatusTooManyRequests ||
-			attempt >= s.maxRetries {
+		if resp.StatusCode != http.StatusTooManyRequests {
+			return body, resp.StatusCode, nil
+		}
+		if attempt >= s.maxRetries {
+			slog.Warn(
+				"sponsr rate limit retries exhausted, giving up",
+				"url", req.URL.String(),
+				"attempts", attempt+1,
+			)
 			return body, resp.StatusCode, nil
 		}
 
@@ -139,21 +156,42 @@ func (s *Client) doRequest(
 	}
 }
 
-// backoff returns how long to wait before retrying, preferring the server's
-// Retry-After header (seconds or HTTP-date form) and otherwise falling back to
-// exponential backoff based on retryBaseDelay.
+// backoff returns how long to wait before retrying. It honors the server's
+// Retry-After header when it specifies a usable delay (a non-negative
+// delta-seconds or a future HTTP-date), otherwise it falls back to exponential
+// backoff based on retryBaseDelay. A non-empty but unparseable Retry-After is
+// logged and treated as absent. Every result is capped at retryMaxDelay.
 func (s *Client) backoff(h http.Header, attempt int) time.Duration {
 	if v := h.Get("Retry-After"); v != "" {
-		if secs, err := strconv.Atoi(v); err == nil && secs > 0 {
-			return time.Duration(secs) * time.Second
+		if d, ok := parseRetryAfter(v); ok {
+			return min(d, retryMaxDelay)
 		}
-		if t, err := http.ParseTime(v); err == nil {
-			if d := time.Until(t); d > 0 {
-				return d
-			}
+		slog.Warn(
+			"unparseable Retry-After header, using exponential backoff",
+			"retry_after", v,
+		)
+	}
+
+	shift := min(attempt, maxBackoffShift)
+	return min(s.retryBaseDelay*time.Duration(1<<shift), retryMaxDelay)
+}
+
+// parseRetryAfter interprets a Retry-After header value in either the
+// delta-seconds or HTTP-date form. It reports ok=false when the value is
+// malformed, negative, or refers to a time already in the past.
+func parseRetryAfter(v string) (time.Duration, bool) {
+	if secs, err := strconv.Atoi(v); err == nil {
+		if secs < 0 {
+			return 0, false
+		}
+		return time.Duration(secs) * time.Second, true
+	}
+	if t, err := http.ParseTime(v); err == nil {
+		if d := time.Until(t); d > 0 {
+			return d, true
 		}
 	}
-	return s.retryBaseDelay * time.Duration(1<<attempt)
+	return 0, false
 }
 
 func PaginatedURL(objectURL string, page, limit int) string {
@@ -310,7 +348,7 @@ func (s *Client) projectIDBySlugURL(
 		return 0, err
 	}
 	if status != http.StatusOK {
-		return 0, fmt.Errorf("unexpected status %d", status)
+		return 0, fmt.Errorf("unexpected status %d: %s", status, body)
 	}
 	match := reProjectID.FindSubmatch(body)
 	if match == nil {
