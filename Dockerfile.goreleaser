@@ -38,10 +38,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && useradd -m appuser
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-# os.UserCacheDir() resolves to $XDG_CACHE_HOME on Linux, so the pre-baked
-# driver is found regardless of HOME / --user, making playwright.Install() a
-# no-op instead of a ~130 MB download on every run.
-ENV XDG_CACHE_HOME=/opt/pw-cache
+# playwright-go locates its driver via PLAYWRIGHT_DRIVER_PATH (checked before the
+# $HOME/.cache fallback), so pointing it at the pre-baked driver makes
+# playwright.Install() a no-op regardless of HOME / --user, instead of a ~130 MB
+# download on every run. The versioned subdir is the playwright CLI version
+# (1.60.0 for playwright-go v0.6000.0) — keep it in sync with go.mod.
+ENV PLAYWRIGHT_DRIVER_PATH=/opt/pw-cache/ms-playwright-go/1.60.0
 COPY --from=playwright-installer /ms-playwright /ms-playwright
 COPY --from=playwright-installer /root/.cache/ms-playwright-go /opt/pw-cache/ms-playwright-go
 RUN chown -R appuser:appuser /ms-playwright \

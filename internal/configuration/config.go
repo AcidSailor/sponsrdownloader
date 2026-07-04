@@ -44,5 +44,8 @@ func (g *Globals) Validate() error {
 	if g.FFmpegTimeout <= 0 {
 		return fmt.Errorf("ffmpeg-timeout must be > 0, got %s", g.FFmpegTimeout)
 	}
+	if g.OutputDir == "" {
+		return fmt.Errorf("output-dir must not be empty")
+	}
 	return nil
 }

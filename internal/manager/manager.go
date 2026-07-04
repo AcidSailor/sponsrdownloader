@@ -77,11 +77,15 @@ func newManager(
 	config configuration.Globals,
 	projectTitle string,
 ) (_ *Manager, err error) {
-	// Join against OutputDir so downloads land in an explicit, writable
-	// location instead of being created relative to the process cwd.
+	// Root downloads under the configurable OutputDir (default: cwd) rather
+	// than always the process cwd.
 	outputPath := filepath.Join(config.OutputDir, projectTitle)
 	if err = os.MkdirAll(outputPath, 0o755); err != nil {
-		return nil, err
+		return nil, fmt.Errorf(
+			"could not create output directory %q: %w",
+			outputPath,
+			err,
+		)
 	}
 
 	ffmpegPath, err := exec.LookPath("ffmpeg")
