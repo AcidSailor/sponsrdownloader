@@ -39,29 +39,26 @@ func TestDownloadSkipsIntactCurrentFile(t *testing.T) {
 	ctx := context.Background()
 
 	// First run: downloads and writes a sidecar.
-	require.NoError(t, m.download(ctx, item, downloadKind{
-		ext:   "pdf",
-		label: "PDF",
-		inner: inner,
+	require.NoError(t, m.download(ctx, item, downloadReq{
+		ext:          "pdf",
+		downloadFunc: inner,
 	}))
 	assert.Equal(t, 1, calls)
 	assert.FileExists(t,
 		sidecarPath(filepath.Join(dir, "post.pdf")))
 
 	// Second run: intact + current -> skipped, inner not called.
-	require.NoError(t, m.download(ctx, item, downloadKind{
-		ext:   "pdf",
-		label: "PDF",
-		inner: inner,
+	require.NoError(t, m.download(ctx, item, downloadReq{
+		ext:          "pdf",
+		downloadFunc: inner,
 	}))
 	assert.Equal(t, 1, calls)
 
 	// Edited post: updated_at advances -> downloads again.
 	item.updatedAt = item.updatedAt.Add(time.Hour)
-	require.NoError(t, m.download(ctx, item, downloadKind{
-		ext:   "pdf",
-		label: "PDF",
-		inner: inner,
+	require.NoError(t, m.download(ctx, item, downloadReq{
+		ext:          "pdf",
+		downloadFunc: inner,
 	}))
 	assert.Equal(t, 2, calls)
 }
@@ -81,10 +78,9 @@ func TestDownloadWrapsInnerErrorAndSkipsSidecar(t *testing.T) {
 		return wantErr
 	}
 
-	err := m.download(context.Background(), item, downloadKind{
-		ext:   "pdf",
-		label: "PDF",
-		inner: inner,
+	err := m.download(context.Background(), item, downloadReq{
+		ext:          "pdf",
+		downloadFunc: inner,
 	})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrManager)
@@ -106,10 +102,9 @@ func TestDownloadWritesNoSidecarWhenNoFileProduced(t *testing.T) {
 	inner := func(context.Context, Downloadable, string) error { return nil }
 
 	require.NoError(t,
-		m.download(context.Background(), item, downloadKind{
-			ext:   "pdf",
-			label: "PDF",
-			inner: inner,
+		m.download(context.Background(), item, downloadReq{
+			ext:          "pdf",
+			downloadFunc: inner,
 		}))
 	assert.NoFileExists(t,
 		sidecarPath(filepath.Join(dir, "post.pdf")))
@@ -129,15 +124,13 @@ func TestDownloadNeverSkipsWithoutUpdatedAt(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	require.NoError(t, m.download(ctx, item, downloadKind{
-		ext:   "pdf",
-		label: "PDF",
-		inner: inner,
+	require.NoError(t, m.download(ctx, item, downloadReq{
+		ext:          "pdf",
+		downloadFunc: inner,
 	}))
-	require.NoError(t, m.download(ctx, item, downloadKind{
-		ext:   "pdf",
-		label: "PDF",
-		inner: inner,
+	require.NoError(t, m.download(ctx, item, downloadReq{
+		ext:          "pdf",
+		downloadFunc: inner,
 	}))
 	assert.Equal(t, 2, calls)
 }

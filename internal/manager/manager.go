@@ -175,26 +175,26 @@ func (m *Manager) Close() {
 	}
 }
 
-// downloadKind describes one output format: the file extension, the
-// human noun used in logs/errors ("PDF"/"video"), and the inner
-// downloader that writes the file to the path handed to it.
-type downloadKind struct {
-	ext   string
-	label string
-	inner func(context.Context, Downloadable, string) error
+// downloadReq describes one output format: the file extension (also
+// upper-cased into the human noun used in logs/errors, so "pdf" -> PDF)
+// and the function that writes the file to the path handed to it.
+type downloadReq struct {
+	ext          string
+	downloadFunc func(context.Context, Downloadable, string) error
 }
 
-// download runs the skip-check, the inner downloader, and the sidecar
+// download runs the skip-check, the download func, and the sidecar
 // write for one item. The output path is built here, once, and handed
-// to kind.inner so the file it writes is exactly the file the
+// to req.downloadFunc so the file it writes is exactly the file the
 // skip/checksum logic tracks.
 func (m *Manager) download(
 	ctx context.Context,
 	item Downloadable,
-	kind downloadKind,
+	req downloadReq,
 ) error {
 	outputPath := filepath.Join(
-		m.outputPath, item.Filename()+"."+kind.ext)
+		m.outputPath, item.Filename()+"."+req.ext)
+	label := strings.ToUpper(req.ext)
 	logger := slog.With("filename", item.Filename())
 
 	if item.UpdatedAt().IsZero() {
@@ -209,14 +209,16 @@ func (m *Manager) download(
 		return nil
 	}
 
-	if err := kind.inner(ctx, item, outputPath); err != nil {
-		return fmt.Errorf(
-			"%w: %s %q: %w", ErrManager, kind.label, item.Filename(), err)
+	if err := req.downloadFunc(ctx, item, outputPath); err != nil {
+		// Both %w keep the sentinel and the cause unwrappable, so
+		// errors.Is finds ErrManager and the underlying error.
+		return fmt.Errorf("%w: %s %q: %w",
+			ErrManager, label, item.Filename(), err)
 	}
 
 	recordChecksum(logger, outputPath, item.UpdatedAt())
 
-	logger.Info("downloaded " + kind.label)
+	logger.Info("downloaded " + label)
 	return nil
 }
 
@@ -224,10 +226,9 @@ func (m *Manager) DownloadPDF(
 	ctx context.Context,
 	item Downloadable,
 ) error {
-	return m.download(ctx, item, downloadKind{
-		ext:   "pdf",
-		label: "PDF",
-		inner: m.downloadPDF,
+	return m.download(ctx, item, downloadReq{
+		ext:          "pdf",
+		downloadFunc: m.downloadPDF,
 	})
 }
 
@@ -309,10 +310,9 @@ func (m *Manager) DownloadVideo(
 	ctx context.Context,
 	item Downloadable,
 ) error {
-	return m.download(ctx, item, downloadKind{
-		ext:   "mp4",
-		label: "video",
-		inner: m.downloadVideo,
+	return m.download(ctx, item, downloadReq{
+		ext:          "mp4",
+		downloadFunc: m.downloadVideo,
 	})
 }
 
