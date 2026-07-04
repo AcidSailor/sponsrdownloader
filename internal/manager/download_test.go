@@ -31,28 +31,35 @@ func TestDownloadSkipsIntactCurrentFile(t *testing.T) {
 	}
 
 	calls := 0
-	inner := func(_ context.Context, it Downloadable) error {
+	inner := func(_ context.Context, _ Downloadable, path string) error {
 		calls++
-		return os.WriteFile(
-			filepath.Join(dir, it.Filename()+".pdf"),
-			[]byte("data"), 0o644)
+		return os.WriteFile(path, []byte("data"), 0o644)
 	}
 
 	ctx := context.Background()
 
 	// First run: downloads and writes a sidecar.
-	require.NoError(t, m.download(ctx, item, "pdf", "PDF", inner))
+	require.NoError(t, m.download(ctx, item, downloadReq{
+		ext:          "pdf",
+		downloadFunc: inner,
+	}))
 	assert.Equal(t, 1, calls)
 	assert.FileExists(t,
 		sidecarPath(filepath.Join(dir, "post.pdf")))
 
 	// Second run: intact + current -> skipped, inner not called.
-	require.NoError(t, m.download(ctx, item, "pdf", "PDF", inner))
+	require.NoError(t, m.download(ctx, item, downloadReq{
+		ext:          "pdf",
+		downloadFunc: inner,
+	}))
 	assert.Equal(t, 1, calls)
 
 	// Edited post: updated_at advances -> downloads again.
 	item.updatedAt = item.updatedAt.Add(time.Hour)
-	require.NoError(t, m.download(ctx, item, "pdf", "PDF", inner))
+	require.NoError(t, m.download(ctx, item, downloadReq{
+		ext:          "pdf",
+		downloadFunc: inner,
+	}))
 	assert.Equal(t, 2, calls)
 }
 
@@ -67,9 +74,14 @@ func TestDownloadWrapsInnerErrorAndSkipsSidecar(t *testing.T) {
 	}
 
 	wantErr := errors.New("boom")
-	inner := func(context.Context, Downloadable) error { return wantErr }
+	inner := func(context.Context, Downloadable, string) error {
+		return wantErr
+	}
 
-	err := m.download(context.Background(), item, "pdf", "PDF", inner)
+	err := m.download(context.Background(), item, downloadReq{
+		ext:          "pdf",
+		downloadFunc: inner,
+	})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrManager)
 	assert.ErrorIs(t, err, wantErr)
@@ -87,10 +99,13 @@ func TestDownloadWritesNoSidecarWhenNoFileProduced(t *testing.T) {
 		updatedAt: time.Date(2026, 6, 29, 18, 1, 55, 0, time.UTC),
 	}
 
-	inner := func(context.Context, Downloadable) error { return nil }
+	inner := func(context.Context, Downloadable, string) error { return nil }
 
 	require.NoError(t,
-		m.download(context.Background(), item, "pdf", "PDF", inner))
+		m.download(context.Background(), item, downloadReq{
+			ext:          "pdf",
+			downloadFunc: inner,
+		}))
 	assert.NoFileExists(t,
 		sidecarPath(filepath.Join(dir, "post.pdf")))
 }
@@ -103,15 +118,19 @@ func TestDownloadNeverSkipsWithoutUpdatedAt(t *testing.T) {
 	item := fakeItem{filename: "post"} // zero updatedAt
 
 	calls := 0
-	inner := func(_ context.Context, it Downloadable) error {
+	inner := func(_ context.Context, _ Downloadable, path string) error {
 		calls++
-		return os.WriteFile(
-			filepath.Join(dir, it.Filename()+".pdf"),
-			[]byte("data"), 0o644)
+		return os.WriteFile(path, []byte("data"), 0o644)
 	}
 	ctx := context.Background()
 
-	require.NoError(t, m.download(ctx, item, "pdf", "PDF", inner))
-	require.NoError(t, m.download(ctx, item, "pdf", "PDF", inner))
+	require.NoError(t, m.download(ctx, item, downloadReq{
+		ext:          "pdf",
+		downloadFunc: inner,
+	}))
+	require.NoError(t, m.download(ctx, item, downloadReq{
+		ext:          "pdf",
+		downloadFunc: inner,
+	}))
 	assert.Equal(t, 2, calls)
 }

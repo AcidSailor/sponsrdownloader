@@ -175,17 +175,25 @@ func (m *Manager) Close() {
 	}
 }
 
-// download runs the skip-check, the inner downloader, and the sidecar
-// write for one item. ext is the output extension ("pdf"/"mp4") and
-// label is the human noun used in logs/errors ("PDF"/"video").
+// downloadReq describes one output format: the file extension (also
+// the noun used in logs/errors) and the function that writes the file
+// to the path handed to it.
+type downloadReq struct {
+	ext          string
+	downloadFunc func(context.Context, Downloadable, string) error
+}
+
+// download runs the skip-check, the download func, and the sidecar
+// write for one item. The output path is built here, once, and handed
+// to req.downloadFunc so the file it writes is exactly the file the
+// skip/checksum logic tracks.
 func (m *Manager) download(
 	ctx context.Context,
 	item Downloadable,
-	ext, label string,
-	inner func(context.Context, Downloadable) error,
+	req downloadReq,
 ) error {
 	outputPath := filepath.Join(
-		m.outputPath, item.Filename()+"."+ext)
+		m.outputPath, item.Filename()+"."+req.ext)
 	logger := slog.With("filename", item.Filename())
 
 	if item.UpdatedAt().IsZero() {
@@ -200,14 +208,16 @@ func (m *Manager) download(
 		return nil
 	}
 
-	if err := inner(ctx, item); err != nil {
-		return fmt.Errorf(
-			"%w: %s %q: %w", ErrManager, label, item.Filename(), err)
+	if err := req.downloadFunc(ctx, item, outputPath); err != nil {
+		// Both %w keep the sentinel and the cause unwrappable, so
+		// errors.Is finds ErrManager and the underlying error.
+		return fmt.Errorf("%w: %s %q: %w",
+			ErrManager, req.ext, item.Filename(), err)
 	}
 
 	recordChecksum(logger, outputPath, item.UpdatedAt())
 
-	logger.Info("downloaded " + label)
+	logger.Info("downloaded " + req.ext)
 	return nil
 }
 
@@ -215,7 +225,10 @@ func (m *Manager) DownloadPDF(
 	ctx context.Context,
 	item Downloadable,
 ) error {
-	return m.download(ctx, item, "pdf", "PDF", m.downloadPDF)
+	return m.download(ctx, item, downloadReq{
+		ext:          "pdf",
+		downloadFunc: m.downloadPDF,
+	})
 }
 
 func (m *Manager) newPage(
@@ -243,7 +256,11 @@ func (m *Manager) newPage(
 	return page, nil
 }
 
-func (m *Manager) downloadPDF(ctx context.Context, item Downloadable) error {
+func (m *Manager) downloadPDF(
+	ctx context.Context,
+	item Downloadable,
+	filePath string,
+) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -280,7 +297,6 @@ func (m *Manager) downloadPDF(ctx context.Context, item Downloadable) error {
 		)
 	}
 
-	filePath := filepath.Join(m.outputPath, item.Filename()+".pdf")
 	_, err = page.PDF(playwright.PagePdfOptions{Path: new(filePath)})
 	if err != nil {
 		return fmt.Errorf("could not create PDF: %w", err)
@@ -293,10 +309,17 @@ func (m *Manager) DownloadVideo(
 	ctx context.Context,
 	item Downloadable,
 ) error {
-	return m.download(ctx, item, "mp4", "video", m.downloadVideo)
+	return m.download(ctx, item, downloadReq{
+		ext:          "mp4",
+		downloadFunc: m.downloadVideo,
+	})
 }
 
-func (m *Manager) downloadVideo(ctx context.Context, item Downloadable) error {
+func (m *Manager) downloadVideo(
+	ctx context.Context,
+	item Downloadable,
+	filePath string,
+) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -368,7 +391,6 @@ func (m *Manager) downloadVideo(ctx context.Context, item Downloadable) error {
 		return m3u8Ctx.Err()
 	}
 
-	filePath := filepath.Join(m.outputPath, item.Filename()+".mp4")
 	// Prefix relative paths with "./" so ffmpeg can't read a leading dash as
 	// a flag; absolute paths are already unambiguous.
 	if !filepath.IsAbs(filePath) {
