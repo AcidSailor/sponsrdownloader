@@ -65,39 +65,48 @@ func fileCRC32(path string) (crc32c, error) {
 	return crcOf(f)
 }
 
-// sidecar records what we know about one downloaded file: the post's
+// fileMeta is the metadata sidecar for one downloaded file: the post's
 // edit time (server change-signal) and the file's crc32c (integrity).
-type sidecar struct {
+// path is the output file it describes; the sidecar itself lives beside
+// that file under .checksums/ and is not serialized.
+type fileMeta struct {
 	UpdatedAt time.Time `json:"updated_at"`
 	CRC32     crc32c    `json:"crc32"`
+	path      string
 }
 
-// sidecarPath maps an output file path to its sidecar path, e.g.
+// newFileMeta describes the output file at outputPath as of updatedAt.
+// The checksum is filled in later by record.
+func newFileMeta(updatedAt time.Time, outputPath string) *fileMeta {
+	return &fileMeta{UpdatedAt: updatedAt, path: outputPath}
+}
+
+// sidecarPath maps the output file path to its sidecar path, e.g.
 // dir/name.pdf -> dir/.checksums/name.pdf.json.
-func sidecarPath(outputPath string) string {
-	dir := filepath.Dir(outputPath)
-	base := filepath.Base(outputPath)
+func (fm *fileMeta) sidecarPath() string {
+	dir := filepath.Dir(fm.path)
+	base := filepath.Base(fm.path)
 	return filepath.Join(dir, checksumDir, base+".json")
 }
 
-// read loads the sidecar for outputPath into s.
-func (s *sidecar) read(outputPath string) error {
-	data, err := os.ReadFile(sidecarPath(outputPath))
+// read loads the sidecar for fm.path into fm, leaving fm.path intact.
+func (fm *fileMeta) read() error {
+	data, err := os.ReadFile(fm.sidecarPath())
 	if err != nil {
 		return err
 	}
-	return json.Unmarshal(data, s)
+	return json.Unmarshal(data, fm)
 }
 
-// write persists s as the sidecar for outputPath via a temp file plus
+// write persists fm as the sidecar for fm.path via a temp file plus
 // atomic rename, so a reader never sees a partial sidecar. It creates
 // the .checksums/ directory as needed.
-func (s sidecar) write(outputPath string) error {
-	path := sidecarPath(outputPath)
+func (fm *fileMeta) write() error {
+	path := fm.sidecarPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	data, err := json.Marshal(s)
+	data, err := json.Marshal(fm)
 	if err != nil {
 		return err
 	}
@@ -112,30 +121,29 @@ func (s sidecar) write(outputPath string) error {
 	return nil
 }
 
-// isCurrent reports whether outputPath already holds a good, current
-// copy for the receiver's UpdatedAt: the file exists, its sidecar
-// updated_at matches, and its crc32c matches the recorded checksum. A
-// missing file or a missing sidecar yields (false, nil) so the caller
-// re-downloads; other errors (unreadable file, corrupt sidecar) are
-// returned so the caller can log them. A zero UpdatedAt is treated as
-// "no edit signal" and always yields false. The updated_at check runs
-// before the file is hashed, so an edited post is settled without
-// reading the file.
-func (s sidecar) isCurrent(outputPath string) (bool, error) {
-	if s.UpdatedAt.IsZero() {
+// upToDate reports whether fm.path already holds a good, current copy
+// for fm.UpdatedAt: the file exists, its sidecar updated_at matches, and
+// its crc32c matches the recorded checksum. A missing file or a missing
+// sidecar yields (false, nil) so the caller re-downloads; other errors
+// (unreadable file, corrupt sidecar) are returned so the caller can log
+// them. A zero UpdatedAt is treated as "no edit signal" and always
+// yields false. The updated_at check runs before the file is hashed, so
+// an edited post is settled without reading the file.
+func (fm *fileMeta) upToDate() (bool, error) {
+	if fm.UpdatedAt.IsZero() {
 		return false, nil
 	}
-	var stored sidecar
-	if err := stored.read(outputPath); err != nil {
+	stored := fileMeta{path: fm.path}
+	if err := stored.read(); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return false, nil
 		}
 		return false, err
 	}
-	if !stored.UpdatedAt.Equal(s.UpdatedAt) {
+	if !stored.UpdatedAt.Equal(fm.UpdatedAt) {
 		return false, nil
 	}
-	crc, err := fileCRC32(outputPath)
+	crc, err := fileCRC32(fm.path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return false, nil
@@ -145,15 +153,14 @@ func (s sidecar) isCurrent(outputPath string) (bool, error) {
 	return crc == stored.CRC32, nil
 }
 
-// record hashes the file at outputPath and writes s (stamped with that
-// checksum) as its sidecar. A missing file is not an error — an
-// unavailable item is skipped by the inner downloader and produces
-// nothing to record. A zero-byte file is a download that failed
-// without erroring and is reported so the caller can fail fast rather
-// than caching garbage. The file is opened once for both the size
-// check and the hash.
-func (s sidecar) record(outputPath string) error {
-	f, err := os.Open(outputPath)
+// record hashes fm.path and writes fm (stamped with that checksum) as
+// its sidecar. A missing file is not an error — an unavailable item is
+// skipped by the download func and produces nothing to record. A
+// zero-byte file is a download that failed without erroring and is
+// reported so the caller can fail fast rather than caching garbage. The
+// file is opened once for both the size check and the hash.
+func (fm *fileMeta) record() error {
+	f, err := os.Open(fm.path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
@@ -174,6 +181,6 @@ func (s sidecar) record(outputPath string) error {
 	if err != nil {
 		return err
 	}
-	s.CRC32 = crc
-	return s.write(outputPath)
+	fm.CRC32 = crc
+	return fm.write()
 }

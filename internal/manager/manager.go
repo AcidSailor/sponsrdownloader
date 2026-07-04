@@ -193,14 +193,15 @@ func (m *Manager) download(
 	req downloadReq,
 ) error {
 	outputPath := filepath.Join(
-		m.outputPath, item.Filename()+"."+req.ext)
+		m.outputPath, item.Filename()+"."+req.ext,
+	)
 	logger := slog.With("filename", item.Filename())
-	want := sidecar{UpdatedAt: item.UpdatedAt()}
+	fm := newFileMeta(item.UpdatedAt(), outputPath)
 
-	if want.UpdatedAt.IsZero() {
+	if fm.UpdatedAt.IsZero() {
 		logger.Warn("no updated_at from API; edit-detection disabled")
 	}
-	done, err := want.isCurrent(outputPath)
+	done, err := fm.upToDate()
 	if err != nil {
 		logger.Warn("could not check existing download", "error", err)
 	}
@@ -215,7 +216,7 @@ func (m *Manager) download(
 		return fmt.Errorf("%w: %s %q: %w",
 			ErrManager, req.ext, item.Filename(), err)
 	}
-	if err := want.record(outputPath); err != nil {
+	if err := fm.record(); err != nil {
 		return fmt.Errorf(
 			"%w: record %s %q: %w",
 			ErrManager, req.ext, item.Filename(), err)

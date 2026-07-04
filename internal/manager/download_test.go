@@ -45,7 +45,8 @@ func TestDownloadSkipsIntactCurrentFile(t *testing.T) {
 	}))
 	assert.Equal(t, 1, calls)
 	assert.FileExists(t,
-		sidecarPath(filepath.Join(dir, "post.pdf")))
+		newFileMeta(time.Time{},
+			filepath.Join(dir, "post.pdf")).sidecarPath())
 
 	// Second run: intact + current -> skipped, inner not called.
 	require.NoError(t, m.download(ctx, item, downloadReq{
@@ -86,7 +87,8 @@ func TestDownloadWrapsInnerErrorAndSkipsSidecar(t *testing.T) {
 	assert.ErrorIs(t, err, ErrManager)
 	assert.ErrorIs(t, err, wantErr)
 	assert.NoFileExists(t,
-		sidecarPath(filepath.Join(dir, "post.pdf")))
+		newFileMeta(time.Time{},
+			filepath.Join(dir, "post.pdf")).sidecarPath())
 }
 
 // When inner produces no file (e.g. an unavailable item), no sidecar is
@@ -107,7 +109,8 @@ func TestDownloadWritesNoSidecarWhenNoFileProduced(t *testing.T) {
 			downloadFunc: inner,
 		}))
 	assert.NoFileExists(t,
-		sidecarPath(filepath.Join(dir, "post.pdf")))
+		newFileMeta(time.Time{},
+			filepath.Join(dir, "post.pdf")).sidecarPath())
 }
 
 // A zero updated_at is not a trustworthy skip signal, so every run
