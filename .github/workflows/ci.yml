@@ -16,7 +16,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Set up Task
-        uses: arduino/setup-task@v2
+        uses: arduino/setup-task@v3
       - name: Install golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
