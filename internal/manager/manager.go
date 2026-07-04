@@ -188,6 +188,9 @@ func (m *Manager) download(
 		m.outputPath, item.Filename()+"."+ext)
 	logger := slog.With("filename", item.Filename())
 
+	if item.UpdatedAt().IsZero() {
+		logger.Warn("no updated_at from API; edit-detection disabled")
+	}
 	done, err := alreadyDownloaded(outputPath, item.UpdatedAt())
 	if err != nil {
 		logger.Warn("could not check existing download", "error", err)
@@ -202,19 +205,7 @@ func (m *Manager) download(
 			"%w: %s %q: %w", ErrManager, label, item.Filename(), err)
 	}
 
-	// Record the checksum only when a file was actually produced;
-	// unavailable items are skipped by inner and write nothing.
-	if _, statErr := os.Stat(outputPath); statErr == nil {
-		crc, crcErr := fileCRC32(outputPath)
-		if crcErr != nil {
-			logger.Warn("could not checksum download", "error", crcErr)
-		} else if wErr := writeSidecar(outputPath, sidecar{
-			UpdatedAt: item.UpdatedAt(),
-			CRC32:     crc,
-		}); wErr != nil {
-			logger.Warn("could not write checksum", "error", wErr)
-		}
-	}
+	recordChecksum(logger, outputPath, item.UpdatedAt())
 
 	logger.Info("downloaded " + label)
 	return nil

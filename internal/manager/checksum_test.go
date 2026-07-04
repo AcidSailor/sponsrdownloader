@@ -21,8 +21,8 @@ func TestFileCRC32(t *testing.T) {
 
 	got, err := fileCRC32(path)
 	require.NoError(t, err)
-	assert.Equal(t, "9a71bb4c", got)
-	assert.Equal(t, want, uint32(0x9a71bb4c))
+	assert.Equal(t, crc32c(want), got)
+	assert.Equal(t, crc32c(0x9a71bb4c), got)
 }
 
 func TestSidecarPath(t *testing.T) {
@@ -36,7 +36,7 @@ func TestSidecarRoundTrip(t *testing.T) {
 	out := filepath.Join(dir, "post.pdf")
 	in := sidecar{
 		UpdatedAt: time.Date(2026, 6, 29, 18, 1, 55, 0, time.UTC),
-		CRC32:     "1a2b3c4d",
+		CRC32:     0x1a2b3c4d,
 	}
 	require.NoError(t, writeSidecar(out, in))
 
@@ -44,6 +44,21 @@ func TestSidecarRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, got.UpdatedAt.Equal(in.UpdatedAt))
 	assert.Equal(t, in.CRC32, got.CRC32)
+}
+
+// TestSidecarJSONIsHex locks the on-disk format: crc32c serializes as
+// eight-char lowercase hex, not as a decimal number.
+func TestSidecarJSONIsHex(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "post.pdf")
+	require.NoError(t, writeSidecar(out, sidecar{
+		UpdatedAt: time.Date(2026, 6, 29, 18, 1, 55, 0, time.UTC),
+		CRC32:     0x1a2b3c4d,
+	}))
+
+	data, err := os.ReadFile(sidecarPath(out))
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"crc32":"1a2b3c4d"`)
 }
 
 func TestReadSidecarMissing(t *testing.T) {
@@ -66,7 +81,7 @@ func TestReadSidecarCorrupt(t *testing.T) {
 
 func writeFileWithSidecar(
 	t *testing.T, dir, name, content string,
-	updatedAt time.Time, crc string,
+	updatedAt time.Time, crc crc32c,
 ) string {
 	t.Helper()
 	out := filepath.Join(dir, name)
@@ -125,7 +140,7 @@ func TestAlreadyDownloaded(t *testing.T) {
 	t.Run("crc mismatch -> false", func(t *testing.T) {
 		dir := t.TempDir()
 		out := writeFileWithSidecar(
-			t, dir, "post.pdf", "data", updated, "deadbeef")
+			t, dir, "post.pdf", "data", updated, 0xdeadbeef)
 
 		ok, err := alreadyDownloaded(out, updated)
 		require.NoError(t, err)
