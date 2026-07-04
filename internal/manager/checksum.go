@@ -83,58 +83,58 @@ func newFileOp(updatedAt time.Time, outputPath string) *fileOp {
 
 // metaPath maps the output file path to its metadata file path, e.g.
 // dir/name.pdf -> dir/.checksums/name.pdf.json.
-func (fm *fileOp) metaPath() string {
-	dir := filepath.Dir(fm.path)
-	base := filepath.Base(fm.path)
+func (fo *fileOp) metaPath() string {
+	dir := filepath.Dir(fo.path)
+	base := filepath.Base(fo.path)
 	return filepath.Join(dir, checksumDir, base+".json")
 }
 
-// read loads fm's metadata file into fm, leaving fm.path intact.
-func (fm *fileOp) read() error {
-	data, err := os.ReadFile(fm.metaPath())
+// read loads fo's metadata file into fo, leaving fo.path intact.
+func (fo *fileOp) read() error {
+	data, err := os.ReadFile(fo.metaPath())
 	if err != nil {
 		return err
 	}
-	return json.Unmarshal(data, fm)
+	return json.Unmarshal(data, fo)
 }
 
-// write persists fm's metadata beside fm.path, under .checksums/,
+// write persists fo's metadata beside fo.path, under .checksums/,
 // creating that directory as needed.
-func (fm *fileOp) write() error {
-	path := fm.metaPath()
+func (fo *fileOp) write() error {
+	path := fo.metaPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	data, err := json.Marshal(fm)
+	data, err := json.Marshal(fo)
 	if err != nil {
 		return err
 	}
 	return os.WriteFile(path, data, 0o644)
 }
 
-// upToDate reports whether fm.path already holds a good, current copy
-// for fm.UpdatedAt: the file exists, its recorded updated_at matches,
+// upToDate reports whether fo.path already holds a good, current copy
+// for fo.UpdatedAt: the file exists, its recorded updated_at matches,
 // and its crc32c matches the recorded checksum. A missing file or a
 // missing metadata file yields (false, nil) so the caller re-downloads;
 // other errors (unreadable file, corrupt metadata) are returned so the
 // caller can log them. A zero UpdatedAt is treated as "no edit signal"
 // and always yields false. The updated_at check runs before the file is
 // hashed, so an edited post is settled without reading the file.
-func (fm *fileOp) upToDate() (bool, error) {
-	if fm.UpdatedAt.IsZero() {
+func (fo *fileOp) upToDate() (bool, error) {
+	if fo.UpdatedAt.IsZero() {
 		return false, nil
 	}
-	stored := fileOp{path: fm.path}
+	stored := fileOp{path: fo.path}
 	if err := stored.read(); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return false, nil
 		}
 		return false, err
 	}
-	if !stored.UpdatedAt.Equal(fm.UpdatedAt) {
+	if !stored.UpdatedAt.Equal(fo.UpdatedAt) {
 		return false, nil
 	}
-	crc, err := fileCRC32(fm.path)
+	crc, err := fileCRC32(fo.path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return false, nil
@@ -144,14 +144,14 @@ func (fm *fileOp) upToDate() (bool, error) {
 	return crc == stored.CRC32, nil
 }
 
-// record hashes fm.path and writes fm (stamped with that checksum) as
+// record hashes fo.path and writes fo (stamped with that checksum) as
 // its metadata file. A missing file is not an error — an unavailable
 // item is skipped by the download func and produces nothing to record.
 // A zero-byte file is a download that failed without erroring and is
 // reported so the caller can fail fast rather than caching garbage. The
 // file is opened once for both the size check and the hash.
-func (fm *fileOp) record() error {
-	f, err := os.Open(fm.path)
+func (fo *fileOp) record() error {
+	f, err := os.Open(fo.path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
@@ -172,6 +172,6 @@ func (fm *fileOp) record() error {
 	if err != nil {
 		return err
 	}
-	fm.CRC32 = crc
-	return fm.write()
+	fo.CRC32 = crc
+	return fo.write()
 }
