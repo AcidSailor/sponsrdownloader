@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -47,11 +46,13 @@ func (c *crc32c) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// sidecar records what we know about one downloaded file: the post's
-// edit time (server change-signal) and the file's crc32c (integrity).
-type sidecar struct {
-	UpdatedAt time.Time `json:"updated_at"`
-	CRC32     crc32c    `json:"crc32"`
+// crcOf returns the crc32c of everything read from r.
+func crcOf(r io.Reader) (crc32c, error) {
+	h := crc32.New(crcTable)
+	if _, err := io.Copy(h, r); err != nil {
+		return 0, err
+	}
+	return crc32c(h.Sum32()), nil
 }
 
 // fileCRC32 returns the crc32c of the file at path.
@@ -61,12 +62,14 @@ func fileCRC32(path string) (crc32c, error) {
 		return 0, err
 	}
 	defer func() { _ = f.Close() }()
+	return crcOf(f)
+}
 
-	h := crc32.New(crcTable)
-	if _, err := io.Copy(h, f); err != nil {
-		return 0, err
-	}
-	return crc32c(h.Sum32()), nil
+// sidecar records what we know about one downloaded file: the post's
+// edit time (server change-signal) and the file's crc32c (integrity).
+type sidecar struct {
+	UpdatedAt time.Time `json:"updated_at"`
+	CRC32     crc32c    `json:"crc32"`
 }
 
 // sidecarPath maps an output file path to its sidecar path, e.g.
@@ -77,23 +80,19 @@ func sidecarPath(outputPath string) string {
 	return filepath.Join(dir, checksumDir, base+".json")
 }
 
-// readSidecar reads and parses the sidecar for outputPath.
-func readSidecar(outputPath string) (sidecar, error) {
-	var s sidecar
+// read loads the sidecar for outputPath into s.
+func (s *sidecar) read(outputPath string) error {
 	data, err := os.ReadFile(sidecarPath(outputPath))
 	if err != nil {
-		return s, err
+		return err
 	}
-	if err := json.Unmarshal(data, &s); err != nil {
-		return s, err
-	}
-	return s, nil
+	return json.Unmarshal(data, s)
 }
 
-// writeSidecar writes s as the sidecar for outputPath via a temp file
-// plus atomic rename, so a reader never sees a partial sidecar. It
-// creates the .checksums/ directory as needed.
-func writeSidecar(outputPath string, s sidecar) error {
+// write persists s as the sidecar for outputPath via a temp file plus
+// atomic rename, so a reader never sees a partial sidecar. It creates
+// the .checksums/ directory as needed.
+func (s sidecar) write(outputPath string) error {
 	path := sidecarPath(outputPath)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -113,76 +112,68 @@ func writeSidecar(outputPath string, s sidecar) error {
 	return nil
 }
 
-// alreadyDownloaded reports whether outputPath already holds a good,
-// current copy: it exists, its sidecar updated_at matches updatedAt,
-// and its crc32c matches the recorded checksum. A missing file or a
-// missing sidecar yields (false, nil) so the caller re-downloads;
-// other errors (unreadable file, corrupt sidecar) are returned so the
-// caller can log them. A zero updatedAt is treated as "no edit signal"
-// and always yields false. The updated_at check runs before the file
-// is hashed, so an edited post is settled without reading the file.
-func alreadyDownloaded(
-	outputPath string,
-	updatedAt time.Time,
-) (bool, error) {
-	if updatedAt.IsZero() {
+// isCurrent reports whether outputPath already holds a good, current
+// copy for the receiver's UpdatedAt: the file exists, its sidecar
+// updated_at matches, and its crc32c matches the recorded checksum. A
+// missing file or a missing sidecar yields (false, nil) so the caller
+// re-downloads; other errors (unreadable file, corrupt sidecar) are
+// returned so the caller can log them. A zero UpdatedAt is treated as
+// "no edit signal" and always yields false. The updated_at check runs
+// before the file is hashed, so an edited post is settled without
+// reading the file.
+func (s sidecar) isCurrent(outputPath string) (bool, error) {
+	if s.UpdatedAt.IsZero() {
 		return false, nil
 	}
-	if _, err := os.Stat(outputPath); err != nil {
+	var stored sidecar
+	if err := stored.read(outputPath); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return false, nil
 		}
 		return false, err
 	}
-	s, err := readSidecar(outputPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return false, nil
-		}
-		return false, err
-	}
-	if !s.UpdatedAt.Equal(updatedAt) {
+	if !stored.UpdatedAt.Equal(s.UpdatedAt) {
 		return false, nil
 	}
 	crc, err := fileCRC32(outputPath)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
 		return false, err
 	}
-	return crc == s.CRC32, nil
+	return crc == stored.CRC32, nil
 }
 
-// recordChecksum hashes the file at outputPath and writes its sidecar,
-// stamping it with updatedAt. It records only when a real file was
-// produced: a missing file (unavailable item skipped by the inner
-// downloader) or a zero-byte file (a download that failed without
-// erroring) is left unrecorded so the next run retries. Every failure
-// is logged and swallowed — the download itself already succeeded.
-func recordChecksum(
-	logger *slog.Logger,
-	outputPath string,
-	updatedAt time.Time,
-) {
-	info, err := os.Stat(outputPath)
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-		return
-	case err != nil:
-		logger.Warn("could not stat download to checksum", "error", err)
-		return
-	case info.Size() == 0:
-		logger.Warn("download produced an empty file; not recording")
-		return
+// record hashes the file at outputPath and writes s (stamped with that
+// checksum) as its sidecar. A missing file is not an error — an
+// unavailable item is skipped by the inner downloader and produces
+// nothing to record. A zero-byte file is a download that failed
+// without erroring and is reported so the caller can fail fast rather
+// than caching garbage. The file is opened once for both the size
+// check and the hash.
+func (s sidecar) record(outputPath string) error {
+	f, err := os.Open(outputPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	defer func() { _ = f.Close() }()
+
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if info.Size() == 0 {
+		return errors.New("download produced an empty file")
 	}
 
-	crc, err := fileCRC32(outputPath)
+	crc, err := crcOf(f)
 	if err != nil {
-		logger.Warn("could not checksum download", "error", err)
-		return
+		return err
 	}
-	if err := writeSidecar(outputPath, sidecar{
-		UpdatedAt: updatedAt,
-		CRC32:     crc,
-	}); err != nil {
-		logger.Warn("could not write checksum", "error", err)
-	}
+	s.CRC32 = crc
+	return s.write(outputPath)
 }

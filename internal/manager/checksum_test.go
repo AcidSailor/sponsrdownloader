@@ -38,10 +38,10 @@ func TestSidecarRoundTrip(t *testing.T) {
 		UpdatedAt: time.Date(2026, 6, 29, 18, 1, 55, 0, time.UTC),
 		CRC32:     0x1a2b3c4d,
 	}
-	require.NoError(t, writeSidecar(out, in))
+	require.NoError(t, in.write(out))
 
-	got, err := readSidecar(out)
-	require.NoError(t, err)
+	var got sidecar
+	require.NoError(t, got.read(out))
 	assert.True(t, got.UpdatedAt.Equal(in.UpdatedAt))
 	assert.Equal(t, in.CRC32, got.CRC32)
 }
@@ -51,10 +51,10 @@ func TestSidecarRoundTrip(t *testing.T) {
 func TestSidecarJSONIsHex(t *testing.T) {
 	dir := t.TempDir()
 	out := filepath.Join(dir, "post.pdf")
-	require.NoError(t, writeSidecar(out, sidecar{
+	require.NoError(t, sidecar{
 		UpdatedAt: time.Date(2026, 6, 29, 18, 1, 55, 0, time.UTC),
 		CRC32:     0x1a2b3c4d,
-	}))
+	}.write(out))
 
 	data, err := os.ReadFile(sidecarPath(out))
 	require.NoError(t, err)
@@ -63,8 +63,8 @@ func TestSidecarJSONIsHex(t *testing.T) {
 
 func TestReadSidecarMissing(t *testing.T) {
 	dir := t.TempDir()
-	_, err := readSidecar(filepath.Join(dir, "nope.pdf"))
-	assert.Error(t, err)
+	var s sidecar
+	assert.Error(t, s.read(filepath.Join(dir, "nope.pdf")))
 }
 
 func TestReadSidecarCorrupt(t *testing.T) {
@@ -75,8 +75,8 @@ func TestReadSidecarCorrupt(t *testing.T) {
 	require.NoError(t,
 		os.WriteFile(sidecarPath(out), []byte("{bad"), 0o644))
 
-	_, err := readSidecar(out)
-	assert.Error(t, err)
+	var s sidecar
+	assert.Error(t, s.read(out))
 }
 
 func writeFileWithSidecar(
@@ -86,14 +86,14 @@ func writeFileWithSidecar(
 	t.Helper()
 	out := filepath.Join(dir, name)
 	require.NoError(t, os.WriteFile(out, []byte(content), 0o644))
-	require.NoError(t, writeSidecar(out, sidecar{
+	require.NoError(t, sidecar{
 		UpdatedAt: updatedAt,
 		CRC32:     crc,
-	}))
+	}.write(out))
 	return out
 }
 
-func TestAlreadyDownloaded(t *testing.T) {
+func TestSidecarIsCurrent(t *testing.T) {
 	updated := time.Date(2026, 6, 29, 18, 1, 55, 0, time.UTC)
 	later := updated.Add(time.Hour)
 
@@ -104,18 +104,18 @@ func TestAlreadyDownloaded(t *testing.T) {
 			os.WriteFile(out, []byte("data"), 0o644))
 		crc, err := fileCRC32(out)
 		require.NoError(t, err)
-		require.NoError(t, writeSidecar(out,
-			sidecar{UpdatedAt: updated, CRC32: crc}))
+		require.NoError(t,
+			sidecar{UpdatedAt: updated, CRC32: crc}.write(out))
 
-		ok, err := alreadyDownloaded(out, updated)
+		ok, err := sidecar{UpdatedAt: updated}.isCurrent(out)
 		require.NoError(t, err)
 		assert.True(t, ok)
 	})
 
 	t.Run("file absent -> false", func(t *testing.T) {
 		dir := t.TempDir()
-		ok, err := alreadyDownloaded(
-			filepath.Join(dir, "missing.pdf"), updated)
+		ok, err := sidecar{UpdatedAt: updated}.isCurrent(
+			filepath.Join(dir, "missing.pdf"))
 		require.NoError(t, err)
 		assert.False(t, ok)
 	})
@@ -129,10 +129,10 @@ func TestAlreadyDownloaded(t *testing.T) {
 		require.NoError(t, err)
 		// Sidecar crc is CORRECT; only the edit-time differs, so a
 		// false result proves updated_at is checked first.
-		require.NoError(t, writeSidecar(out,
-			sidecar{UpdatedAt: updated, CRC32: crc}))
+		require.NoError(t,
+			sidecar{UpdatedAt: updated, CRC32: crc}.write(out))
 
-		ok, err := alreadyDownloaded(out, later)
+		ok, err := sidecar{UpdatedAt: later}.isCurrent(out)
 		require.NoError(t, err)
 		assert.False(t, ok)
 	})
@@ -142,7 +142,7 @@ func TestAlreadyDownloaded(t *testing.T) {
 		out := writeFileWithSidecar(
 			t, dir, "post.pdf", "data", updated, 0xdeadbeef)
 
-		ok, err := alreadyDownloaded(out, updated)
+		ok, err := sidecar{UpdatedAt: updated}.isCurrent(out)
 		require.NoError(t, err)
 		assert.False(t, ok)
 	})
@@ -153,8 +153,57 @@ func TestAlreadyDownloaded(t *testing.T) {
 		require.NoError(t,
 			os.WriteFile(out, []byte("data"), 0o644))
 
-		ok, err := alreadyDownloaded(out, updated)
+		ok, err := sidecar{UpdatedAt: updated}.isCurrent(out)
 		require.NoError(t, err)
 		assert.False(t, ok)
+	})
+
+	t.Run("zero updated_at -> false", func(t *testing.T) {
+		dir := t.TempDir()
+		out := filepath.Join(dir, "post.pdf")
+		require.NoError(t,
+			os.WriteFile(out, []byte("data"), 0o644))
+		crc, err := fileCRC32(out)
+		require.NoError(t, err)
+		require.NoError(t,
+			sidecar{CRC32: crc}.write(out))
+
+		ok, err := sidecar{}.isCurrent(out)
+		require.NoError(t, err)
+		assert.False(t, ok)
+	})
+}
+
+func TestSidecarRecord(t *testing.T) {
+	updated := time.Date(2026, 6, 29, 18, 1, 55, 0, time.UTC)
+
+	t.Run("real file -> writes matching sidecar", func(t *testing.T) {
+		dir := t.TempDir()
+		out := filepath.Join(dir, "post.pdf")
+		require.NoError(t, os.WriteFile(out, []byte("data"), 0o644))
+
+		require.NoError(t, sidecar{UpdatedAt: updated}.record(out))
+
+		wantCRC, err := fileCRC32(out)
+		require.NoError(t, err)
+		var got sidecar
+		require.NoError(t, got.read(out))
+		assert.True(t, got.UpdatedAt.Equal(updated))
+		assert.Equal(t, wantCRC, got.CRC32)
+	})
+
+	t.Run("missing file -> no sidecar, no error", func(t *testing.T) {
+		dir := t.TempDir()
+		out := filepath.Join(dir, "gone.pdf")
+		require.NoError(t, sidecar{UpdatedAt: updated}.record(out))
+		assert.NoFileExists(t, sidecarPath(out))
+	})
+
+	t.Run("empty file -> error, no sidecar", func(t *testing.T) {
+		dir := t.TempDir()
+		out := filepath.Join(dir, "empty.pdf")
+		require.NoError(t, os.WriteFile(out, nil, 0o644))
+		assert.Error(t, sidecar{UpdatedAt: updated}.record(out))
+		assert.NoFileExists(t, sidecarPath(out))
 	})
 }
