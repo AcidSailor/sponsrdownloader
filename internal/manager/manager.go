@@ -175,19 +175,26 @@ func (m *Manager) Close() {
 	}
 }
 
+// downloadKind describes one output format: the file extension, the
+// human noun used in logs/errors ("PDF"/"video"), and the inner
+// downloader that writes the file to the path handed to it.
+type downloadKind struct {
+	ext   string
+	label string
+	inner func(context.Context, Downloadable, string) error
+}
+
 // download runs the skip-check, the inner downloader, and the sidecar
-// write for one item. ext is the output extension ("pdf"/"mp4") and
-// label is the human noun used in logs/errors ("PDF"/"video"). The
-// output path is built here, once, and handed to inner so the file it
-// writes is exactly the file the skip/checksum logic tracks.
+// write for one item. The output path is built here, once, and handed
+// to kind.inner so the file it writes is exactly the file the
+// skip/checksum logic tracks.
 func (m *Manager) download(
 	ctx context.Context,
 	item Downloadable,
-	ext, label string,
-	inner func(context.Context, Downloadable, string) error,
+	kind downloadKind,
 ) error {
 	outputPath := filepath.Join(
-		m.outputPath, item.Filename()+"."+ext)
+		m.outputPath, item.Filename()+"."+kind.ext)
 	logger := slog.With("filename", item.Filename())
 
 	if item.UpdatedAt().IsZero() {
@@ -202,14 +209,14 @@ func (m *Manager) download(
 		return nil
 	}
 
-	if err := inner(ctx, item, outputPath); err != nil {
+	if err := kind.inner(ctx, item, outputPath); err != nil {
 		return fmt.Errorf(
-			"%w: %s %q: %w", ErrManager, label, item.Filename(), err)
+			"%w: %s %q: %w", ErrManager, kind.label, item.Filename(), err)
 	}
 
 	recordChecksum(logger, outputPath, item.UpdatedAt())
 
-	logger.Info("downloaded " + label)
+	logger.Info("downloaded " + kind.label)
 	return nil
 }
 
@@ -217,7 +224,11 @@ func (m *Manager) DownloadPDF(
 	ctx context.Context,
 	item Downloadable,
 ) error {
-	return m.download(ctx, item, "pdf", "PDF", m.downloadPDF)
+	return m.download(ctx, item, downloadKind{
+		ext:   "pdf",
+		label: "PDF",
+		inner: m.downloadPDF,
+	})
 }
 
 func (m *Manager) newPage(
@@ -298,7 +309,11 @@ func (m *Manager) DownloadVideo(
 	ctx context.Context,
 	item Downloadable,
 ) error {
-	return m.download(ctx, item, "mp4", "video", m.downloadVideo)
+	return m.download(ctx, item, downloadKind{
+		ext:   "mp4",
+		label: "video",
+		inner: m.downloadVideo,
+	})
 }
 
 func (m *Manager) downloadVideo(
