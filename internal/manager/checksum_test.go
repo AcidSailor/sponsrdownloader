@@ -63,3 +63,83 @@ func TestReadSidecarCorrupt(t *testing.T) {
 	_, err := readSidecar(out)
 	assert.Error(t, err)
 }
+
+func writeFileWithSidecar(
+	t *testing.T, dir, name, content string,
+	updatedAt time.Time, crc string,
+) string {
+	t.Helper()
+	out := filepath.Join(dir, name)
+	require.NoError(t, os.WriteFile(out, []byte(content), 0o644))
+	require.NoError(t, writeSidecar(out, sidecar{
+		UpdatedAt: updatedAt,
+		CRC32:     crc,
+	}))
+	return out
+}
+
+func TestAlreadyDownloaded(t *testing.T) {
+	updated := time.Date(2026, 6, 29, 18, 1, 55, 0, time.UTC)
+	later := updated.Add(time.Hour)
+
+	t.Run("all match -> true", func(t *testing.T) {
+		dir := t.TempDir()
+		out := filepath.Join(dir, "post.pdf")
+		require.NoError(t,
+			os.WriteFile(out, []byte("data"), 0o644))
+		crc, err := fileCRC32(out)
+		require.NoError(t, err)
+		require.NoError(t, writeSidecar(out,
+			sidecar{UpdatedAt: updated, CRC32: crc}))
+
+		ok, err := alreadyDownloaded(out, updated)
+		require.NoError(t, err)
+		assert.True(t, ok)
+	})
+
+	t.Run("file absent -> false", func(t *testing.T) {
+		dir := t.TempDir()
+		ok, err := alreadyDownloaded(
+			filepath.Join(dir, "missing.pdf"), updated)
+		require.NoError(t, err)
+		assert.False(t, ok)
+	})
+
+	t.Run("updated_at advanced -> false", func(t *testing.T) {
+		dir := t.TempDir()
+		out := filepath.Join(dir, "post.pdf")
+		require.NoError(t,
+			os.WriteFile(out, []byte("data"), 0o644))
+		crc, err := fileCRC32(out)
+		require.NoError(t, err)
+		// Sidecar crc is CORRECT; only the edit-time differs, so a
+		// false result proves updated_at is checked first.
+		require.NoError(t, writeSidecar(out,
+			sidecar{UpdatedAt: updated, CRC32: crc}))
+
+		ok, err := alreadyDownloaded(out, later)
+		require.NoError(t, err)
+		assert.False(t, ok)
+	})
+
+	t.Run("crc mismatch -> false", func(t *testing.T) {
+		dir := t.TempDir()
+		out := writeFileWithSidecar(
+			t, dir, "post.pdf", "data", updated, "deadbeef")
+
+		ok, err := alreadyDownloaded(out, updated)
+		require.NoError(t, err)
+		assert.False(t, ok)
+	})
+
+	t.Run("missing sidecar -> false", func(t *testing.T) {
+		dir := t.TempDir()
+		out := filepath.Join(dir, "post.pdf")
+		require.NoError(t,
+			os.WriteFile(out, []byte("data"), 0o644))
+
+		ok, err := alreadyDownloaded(out, updated)
+		require.NoError(t, err)
+		assert.False(t, ok)
+	})
+}

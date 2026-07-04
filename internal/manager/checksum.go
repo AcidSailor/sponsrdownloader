@@ -79,3 +79,30 @@ func writeSidecar(outputPath string, s sidecar) error {
 	}
 	return os.Rename(tmp, path)
 }
+
+// alreadyDownloaded reports whether outputPath already holds a good,
+// current copy: it exists, its sidecar updated_at matches updatedAt,
+// and its crc32c matches the recorded checksum. Any mismatch, a
+// missing file, or a missing/corrupt sidecar yields false so the
+// caller re-downloads. The updated_at check runs before the file is
+// hashed, so an edited post is settled without reading the file.
+func alreadyDownloaded(
+	outputPath string,
+	updatedAt time.Time,
+) (bool, error) {
+	if _, err := os.Stat(outputPath); err != nil {
+		return false, nil
+	}
+	s, err := readSidecar(outputPath)
+	if err != nil {
+		return false, nil
+	}
+	if !s.UpdatedAt.Equal(updatedAt) {
+		return false, nil
+	}
+	crc, err := fileCRC32(outputPath)
+	if err != nil {
+		return false, err
+	}
+	return crc == s.CRC32, nil
+}
