@@ -183,7 +183,7 @@ type downloadReq struct {
 	downloadFunc func(context.Context, Downloadable, string) error
 }
 
-// download runs the skip-check, the download func, and the sidecar
+// download runs the skip-check, the download func, and the metadata
 // write for one item. The output path is built here, once, and handed
 // to req.downloadFunc so the file it writes is exactly the file the
 // skip/checksum logic tracks.
@@ -196,7 +196,7 @@ func (m *Manager) download(
 		m.outputPath, item.Filename()+"."+req.ext,
 	)
 	logger := slog.With("filename", item.Filename())
-	fm := newFileMeta(item.UpdatedAt(), outputPath)
+	fm := newFileOp(item.UpdatedAt(), outputPath)
 
 	if fm.UpdatedAt.IsZero() {
 		logger.Warn("no updated_at from API; edit-detection disabled")

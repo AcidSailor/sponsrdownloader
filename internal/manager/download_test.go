@@ -38,15 +38,15 @@ func TestDownloadSkipsIntactCurrentFile(t *testing.T) {
 
 	ctx := context.Background()
 
-	// First run: downloads and writes a sidecar.
+	// First run: downloads and writes a metadata.
 	require.NoError(t, m.download(ctx, item, downloadReq{
 		ext:          "pdf",
 		downloadFunc: inner,
 	}))
 	assert.Equal(t, 1, calls)
 	assert.FileExists(t,
-		newFileMeta(time.Time{},
-			filepath.Join(dir, "post.pdf")).sidecarPath())
+		newFileOp(time.Time{},
+			filepath.Join(dir, "post.pdf")).metaPath())
 
 	// Second run: intact + current -> skipped, inner not called.
 	require.NoError(t, m.download(ctx, item, downloadReq{
@@ -65,8 +65,8 @@ func TestDownloadSkipsIntactCurrentFile(t *testing.T) {
 }
 
 // A failing inner download is wrapped with the ErrManager sentinel and
-// leaves no sidecar behind, so the next run retries.
-func TestDownloadWrapsInnerErrorAndSkipsSidecar(t *testing.T) {
+// leaves no metadata behind, so the next run retries.
+func TestDownloadWrapsInnerErrorAndSkipsMeta(t *testing.T) {
 	dir := t.TempDir()
 	m := &Manager{outputPath: dir}
 	item := fakeItem{
@@ -87,13 +87,13 @@ func TestDownloadWrapsInnerErrorAndSkipsSidecar(t *testing.T) {
 	assert.ErrorIs(t, err, ErrManager)
 	assert.ErrorIs(t, err, wantErr)
 	assert.NoFileExists(t,
-		newFileMeta(time.Time{},
-			filepath.Join(dir, "post.pdf")).sidecarPath())
+		newFileOp(time.Time{},
+			filepath.Join(dir, "post.pdf")).metaPath())
 }
 
-// When inner produces no file (e.g. an unavailable item), no sidecar is
+// When inner produces no file (e.g. an unavailable item), no metadata is
 // written and download still succeeds.
-func TestDownloadWritesNoSidecarWhenNoFileProduced(t *testing.T) {
+func TestDownloadWritesNoMetaWhenNoFileProduced(t *testing.T) {
 	dir := t.TempDir()
 	m := &Manager{outputPath: dir}
 	item := fakeItem{
@@ -109,12 +109,12 @@ func TestDownloadWritesNoSidecarWhenNoFileProduced(t *testing.T) {
 			downloadFunc: inner,
 		}))
 	assert.NoFileExists(t,
-		newFileMeta(time.Time{},
-			filepath.Join(dir, "post.pdf")).sidecarPath())
+		newFileOp(time.Time{},
+			filepath.Join(dir, "post.pdf")).metaPath())
 }
 
 // A zero updated_at is not a trustworthy skip signal, so every run
-// re-downloads even though an intact file and sidecar exist.
+// re-downloads even though an intact file and metadata exist.
 func TestDownloadNeverSkipsWithoutUpdatedAt(t *testing.T) {
 	dir := t.TempDir()
 	m := &Manager{outputPath: dir}
