@@ -31,11 +31,9 @@ func TestDownloadSkipsIntactCurrentFile(t *testing.T) {
 	}
 
 	calls := 0
-	inner := func(_ context.Context, it Downloadable) error {
+	inner := func(_ context.Context, _ Downloadable, path string) error {
 		calls++
-		return os.WriteFile(
-			filepath.Join(dir, it.Filename()+".pdf"),
-			[]byte("data"), 0o644)
+		return os.WriteFile(path, []byte("data"), 0o644)
 	}
 
 	ctx := context.Background()
@@ -67,7 +65,9 @@ func TestDownloadWrapsInnerErrorAndSkipsSidecar(t *testing.T) {
 	}
 
 	wantErr := errors.New("boom")
-	inner := func(context.Context, Downloadable) error { return wantErr }
+	inner := func(context.Context, Downloadable, string) error {
+		return wantErr
+	}
 
 	err := m.download(context.Background(), item, "pdf", "PDF", inner)
 	require.Error(t, err)
@@ -87,7 +87,7 @@ func TestDownloadWritesNoSidecarWhenNoFileProduced(t *testing.T) {
 		updatedAt: time.Date(2026, 6, 29, 18, 1, 55, 0, time.UTC),
 	}
 
-	inner := func(context.Context, Downloadable) error { return nil }
+	inner := func(context.Context, Downloadable, string) error { return nil }
 
 	require.NoError(t,
 		m.download(context.Background(), item, "pdf", "PDF", inner))
@@ -103,11 +103,9 @@ func TestDownloadNeverSkipsWithoutUpdatedAt(t *testing.T) {
 	item := fakeItem{filename: "post"} // zero updatedAt
 
 	calls := 0
-	inner := func(_ context.Context, it Downloadable) error {
+	inner := func(_ context.Context, _ Downloadable, path string) error {
 		calls++
-		return os.WriteFile(
-			filepath.Join(dir, it.Filename()+".pdf"),
-			[]byte("data"), 0o644)
+		return os.WriteFile(path, []byte("data"), 0o644)
 	}
 	ctx := context.Background()
 
