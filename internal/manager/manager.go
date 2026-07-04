@@ -176,8 +176,8 @@ func (m *Manager) Close() {
 }
 
 // downloadReq describes one output format: the file extension (also
-// upper-cased into the human noun used in logs/errors, so "pdf" -> PDF)
-// and the function that writes the file to the path handed to it.
+// the noun used in logs/errors) and the function that writes the file
+// to the path handed to it.
 type downloadReq struct {
 	ext          string
 	downloadFunc func(context.Context, Downloadable, string) error
@@ -194,7 +194,6 @@ func (m *Manager) download(
 ) error {
 	outputPath := filepath.Join(
 		m.outputPath, item.Filename()+"."+req.ext)
-	label := strings.ToUpper(req.ext)
 	logger := slog.With("filename", item.Filename())
 
 	if item.UpdatedAt().IsZero() {
@@ -213,12 +212,12 @@ func (m *Manager) download(
 		// Both %w keep the sentinel and the cause unwrappable, so
 		// errors.Is finds ErrManager and the underlying error.
 		return fmt.Errorf("%w: %s %q: %w",
-			ErrManager, label, item.Filename(), err)
+			ErrManager, req.ext, item.Filename(), err)
 	}
 
 	recordChecksum(logger, outputPath, item.UpdatedAt())
 
-	logger.Info("downloaded " + label)
+	logger.Info("downloaded " + req.ext)
 	return nil
 }
 
