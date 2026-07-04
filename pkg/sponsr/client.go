@@ -2,7 +2,6 @@ package sponsr
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,10 +10,10 @@ import (
 	"net/url"
 	"regexp"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
+	"github.com/acidsailor/restkit"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
 )
@@ -24,10 +23,19 @@ var reProjectID = regexp.MustCompile(`"project_id":\s*(\d+)`)
 var ErrSponsrClient = errors.New("sponsr client")
 
 type Client struct {
-	bearerToken      string
-	httpClient       *http.Client
+	rk               *restkit.Client
+	httpClient       *http.Client // shared; used raw for the HTML scrape
 	concurrencyLimit int
 	paginatorLimit   int
+}
+
+// bearerAuthHook returns a restkit RequestHook that attaches the bearer token
+// to every request.
+func bearerAuthHook(token string) restkit.RequestHook {
+	return func(r *http.Request) error {
+		r.Header.Set("Authorization", "Bearer "+token)
+		return nil
+	}
 }
 
 func NewClient(
@@ -70,54 +78,24 @@ func NewClient(
 	transport := newRateLimitRetryTransport(
 		http.DefaultTransport, limiter, maxRetries, retryBaseDelay,
 	)
+	httpClient := &http.Client{Timeout: timeout, Transport: transport}
+
+	rk, err := restkit.New(
+		ApiEndpoint,
+		restkit.WithName("sponsr"),
+		restkit.WithHTTPClient(httpClient),
+		restkit.WithHook(bearerAuthHook(bearerToken)),
+	)
+	if err != nil {
+		return nil, errors.Join(ErrSponsrClient, err)
+	}
 
 	return &Client{
-		bearerToken:      bearerToken,
-		httpClient:       &http.Client{Timeout: timeout, Transport: transport},
+		rk:               rk,
+		httpClient:       httpClient,
 		concurrencyLimit: concurrencyLimit,
 		paginatorLimit:   paginatorLimit,
 	}, nil
-}
-
-// doRequest sends req through the shared client (which rate-limits and retries
-// 429 via its transport) and returns the response body and status. The request
-// must be idempotent, since the transport may replay it.
-func (s *Client) doRequest(
-	ctx context.Context,
-	req *http.Request,
-) (body []byte, status int, err error) {
-	resp, err := s.httpClient.Do(req)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer func() {
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			slog.Error("could not close response body", "error", closeErr)
-		}
-	}()
-
-	body, err = io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, resp.StatusCode, fmt.Errorf(
-			"failed to read body: %w",
-			err,
-		)
-	}
-	return body, resp.StatusCode, nil
-}
-
-func PaginatedURL(objectURL string, page, limit int) string {
-	sep := "&"
-	if !strings.Contains(objectURL, "?") {
-		sep = "?"
-	}
-	return fmt.Sprintf(
-		"%s%s%s", objectURL, sep,
-		url.Values{
-			"page":  {strconv.Itoa(page)},
-			"limit": {strconv.Itoa(limit)},
-		}.Encode(),
-	)
 }
 
 func CalculatePages(total, limit int) int {
@@ -128,64 +106,31 @@ func CalculatePages(total, limit int) int {
 }
 
 func GetObjects[T any](
-	s *Client, ctx context.Context, objectURL string,
+	s *Client, ctx context.Context, objectPath string,
 	page, limit int,
 ) (*Objects[T], error) {
-	objects, err := getObjects[T](s, ctx, objectURL, page, limit)
-	if err != nil {
-		return nil, errors.Join(ErrSponsrClient, &url.Error{
-			Op:  http.MethodGet,
-			URL: objectURL,
-			Err: err,
-		})
-	}
-	return objects, nil
-}
-
-func getObjects[T any](
-	s *Client, ctx context.Context, objectURL string,
-	page, limit int,
-) (*Objects[T], error) {
-	req, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodGet,
-		PaginatedURL(objectURL, page, limit),
-		nil,
+	objs, err := restkit.Do[Objects[T]](
+		ctx, s.rk, http.MethodGet, objectPath, nil,
+		restkit.WithQuery(url.Values{
+			"page":  {strconv.Itoa(page)},
+			"limit": {strconv.Itoa(limit)},
+		}),
 	)
 	if err != nil {
-		return nil, err
+		return nil, errors.Join(ErrSponsrClient, fmt.Errorf(
+			"GET %s: %w", objectPath, err,
+		))
 	}
-
-	for k, v := range map[string]string{
-		"Accept":        "application/json",
-		"Authorization": "Bearer " + s.bearerToken,
-	} {
-		req.Header.Set(k, v)
-	}
-
-	body, status, err := s.doRequest(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	if status != http.StatusOK {
-		return nil, fmt.Errorf("%d: %s", status, body)
-	}
-
-	var object Objects[T]
-	if err := json.Unmarshal(body, &object); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal body: %w", err)
-	}
-
-	return &object, nil
+	return &objs, nil
 }
 
 func GetObjectsAll[T any](
 	s *Client,
 	ctx context.Context,
-	objectURL string,
+	objectPath string,
 ) ([]T, error) {
 	// Fetch page 1 at full limit so its data is reused directly.
-	firstPage, err := GetObjects[T](s, ctx, objectURL, 1, s.paginatorLimit)
+	firstPage, err := GetObjects[T](s, ctx, objectPath, 1, s.paginatorLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -193,7 +138,7 @@ func GetObjectsAll[T any](
 		return nil, fmt.Errorf(
 			"%w: response is nil for %s",
 			ErrSponsrClient,
-			objectURL,
+			objectPath,
 		)
 	}
 
@@ -211,7 +156,7 @@ func GetObjectsAll[T any](
 
 	for p := 2; p <= pages; p++ {
 		eg.Go(func() error {
-			resp, err := GetObjects[T](s, ctx, objectURL, p, s.paginatorLimit)
+			resp, err := GetObjects[T](s, ctx, objectPath, p, s.paginatorLimit)
 			if err != nil {
 				return err
 			}
@@ -219,7 +164,7 @@ func GetObjectsAll[T any](
 				return fmt.Errorf(
 					"%w: response is nil for %s",
 					ErrSponsrClient,
-					objectURL,
+					objectPath,
 				)
 			}
 			mu.Lock()
@@ -251,17 +196,35 @@ func (s *Client) projectIDBySlugURL(
 	ctx context.Context,
 	pageURL string,
 ) (int, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
+	req, err := http.NewRequestWithContext(
+		ctx, http.MethodGet, pageURL, nil,
+	)
 	if err != nil {
 		return 0, err
 	}
-	body, status, err := s.doRequest(ctx, req)
+
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return 0, err
 	}
-	if status != http.StatusOK {
-		return 0, fmt.Errorf("unexpected status %d: %s", status, body)
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			slog.Error("could not close response body", "error", closeErr)
+		}
+	}()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read body: %w", err)
 	}
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf(
+			"unexpected status %d: %s",
+			resp.StatusCode,
+			body,
+		)
+	}
+
 	match := reProjectID.FindSubmatch(body)
 	if match == nil {
 		return 0, fmt.Errorf(
@@ -288,13 +251,13 @@ func (s *Client) Projects(
 ) ([]Project, error) {
 	return GetObjectsAll[Project](
 		s, ctx,
-		fmt.Sprintf("%s?id=%d", ProjectsEndpoint, projectID),
+		fmt.Sprintf("%s?id=%d", ProjectsPath, projectID),
 	)
 }
 
 func (s *Client) Posts(ctx context.Context, projectID int) ([]Post, error) {
 	return GetObjectsAll[Post](
 		s, ctx,
-		fmt.Sprintf("%s?project_id=%d", PostsEndpoint, projectID),
+		fmt.Sprintf("%s?project_id=%d", PostsPath, projectID),
 	)
 }

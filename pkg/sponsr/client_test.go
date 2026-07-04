@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/acidsailor/restkit"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/time/rate"
@@ -30,13 +31,6 @@ func TestCalculatePages(t *testing.T) {
 	for _, tt := range tests {
 		assert.Equal(t, tt.want, CalculatePages(tt.total, tt.limit))
 	}
-}
-
-func TestPaginatedURL(t *testing.T) {
-	got := PaginatedURL("https://example.com/api?foo=bar", 2, 20)
-	assert.Contains(t, got, "page=2")
-	assert.Contains(t, got, "limit=20")
-	assert.Contains(t, got, "foo=bar")
 }
 
 func TestProjectIDBySlug(t *testing.T) {
@@ -87,7 +81,7 @@ func TestGetObjects(t *testing.T) {
 	got, err := GetObjects[Post](
 		newTestClient(srv),
 		context.Background(),
-		srv.URL+"/posts?project_id=1",
+		"/posts?project_id=1",
 		1,
 		20,
 	)
@@ -133,7 +127,7 @@ func TestGetObjectsAll_Pagination(t *testing.T) {
 	got, err := GetObjectsAll[Post](
 		client,
 		context.Background(),
-		srv.URL+"/posts?project_id=1",
+		"/posts?project_id=1",
 	)
 	require.NoError(t, err)
 	assert.Len(t, got, total)
@@ -150,7 +144,7 @@ func TestGetObjects_HTTPError(t *testing.T) {
 	_, err := GetObjects[Post](
 		newTestClient(srv),
 		context.Background(),
-		srv.URL+"/posts?project_id=1",
+		"/posts?project_id=1",
 		1,
 		20,
 	)
@@ -167,25 +161,19 @@ func TestGetObjects_429ExhaustsRetries(t *testing.T) {
 	)
 	defer srv.Close()
 
-	client := &Client{
-		bearerToken: "test-token",
-		httpClient: &http.Client{
-			Transport: newRateLimitRetryTransport(
-				srv.Client().Transport, nil, 2, time.Millisecond,
-			),
-		},
-		concurrencyLimit: 4,
-		paginatorLimit:   20,
-	}
+	client := newTestClientTransport(srv, newRateLimitRetryTransport(
+		srv.Client().Transport, nil, 2, time.Millisecond,
+	))
 
 	_, err := GetObjects[Post](
 		client,
 		context.Background(),
-		srv.URL+"/posts?project_id=1",
+		"/posts?project_id=1",
 		1,
 		20,
 	)
 	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrSponsrClient)
 	assert.Contains(t, err.Error(), "429")
 	// 1 initial attempt + 2 retries.
 	assert.Equal(t, int32(3), calls.Load())
@@ -209,24 +197,17 @@ func TestGetObjectsAll_RateLimiterSpacesRequests(t *testing.T) {
 	defer srv.Close()
 
 	const delay = 25 * time.Millisecond
-	client := &Client{
-		bearerToken: "test-token",
-		httpClient: &http.Client{
-			Transport: newRateLimitRetryTransport(
-				srv.Client().Transport,
-				rate.NewLimiter(rate.Every(delay), 1),
-				0,
-				time.Millisecond,
-			),
-		},
-		concurrencyLimit: 4,
-		paginatorLimit:   20,
-	}
+	client := newTestClientTransport(srv, newRateLimitRetryTransport(
+		srv.Client().Transport,
+		rate.NewLimiter(rate.Every(delay), 1),
+		0,
+		time.Millisecond,
+	))
 
 	_, err := GetObjectsAll[Post](
 		client,
 		context.Background(),
-		srv.URL+"/posts?project_id=1",
+		"/posts?project_id=1",
 	)
 	require.NoError(t, err)
 
@@ -269,14 +250,56 @@ func TestNewClient_RateLimiter(t *testing.T) {
 }
 
 func newTestClient(srv *httptest.Server) *Client {
+	return newTestClientTransport(srv, newRateLimitRetryTransport(
+		srv.Client().Transport, nil, 0, time.Millisecond,
+	))
+}
+
+func newTestClientTransport(
+	srv *httptest.Server, tr *rateLimitRetryTransport,
+) *Client {
+	hc := &http.Client{Transport: tr}
+	rk, err := restkit.New(
+		srv.URL,
+		restkit.WithName("sponsr"),
+		restkit.WithHTTPClient(hc),
+		restkit.WithHook(bearerAuthHook("test-token")),
+	)
+	if err != nil {
+		panic(err)
+	}
 	return &Client{
-		bearerToken: "test-token",
-		httpClient: &http.Client{
-			Transport: newRateLimitRetryTransport(
-				srv.Client().Transport, nil, 0, time.Millisecond,
-			),
-		},
+		rk:               rk,
+		httpClient:       hc,
 		concurrencyLimit: 4,
 		paginatorLimit:   20,
 	}
+}
+
+func TestGetObjects_SendsAuthAndMergesQuery(t *testing.T) {
+	var gotAuth, gotPage, gotLimit, gotProject string
+	srv := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotAuth = r.Header.Get("Authorization")
+			gotPage = r.URL.Query().Get("page")
+			gotLimit = r.URL.Query().Get("limit")
+			gotProject = r.URL.Query().Get("project_id")
+			_ = json.NewEncoder(w).
+				Encode(Objects[Post]{Total: 0, List: nil, Page: 1, Limit: 20})
+		}),
+	)
+	defer srv.Close()
+
+	_, err := GetObjects[Post](
+		newTestClient(srv),
+		context.Background(),
+		"/posts?project_id=7",
+		3,
+		20,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "Bearer test-token", gotAuth)
+	assert.Equal(t, "3", gotPage)
+	assert.Equal(t, "20", gotLimit)
+	assert.Equal(t, "7", gotProject)
 }
