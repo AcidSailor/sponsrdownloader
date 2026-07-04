@@ -23,28 +23,11 @@ var reProjectID = regexp.MustCompile(`"project_id":\s*(\d+)`)
 
 var ErrSponsrClient = errors.New("sponsr client")
 
-// retryBaseDelay is the default exponential-backoff base assigned to
-// Client.retryBaseDelay when the Sponsr API responds with 429 and provides
-// no usable Retry-After header.
-const retryBaseDelay = time.Second
-
-// retryMaxDelay caps a single backoff wait. It bounds both very large
-// Retry-After values and the exponential growth, which would otherwise
-// overflow time.Duration at high retry counts and silently defeat backoff.
-const retryMaxDelay = 2 * time.Minute
-
 type Client struct {
 	bearerToken      string
 	httpClient       *http.Client
 	concurrencyLimit int
 	paginatorLimit   int
-	// limiter spaces out all outgoing API requests to avoid tripping the
-	// server-side throttler; nil disables client-side rate limiting.
-	limiter *rate.Limiter
-	// maxRetries is the number of extra attempts made on HTTP 429 responses.
-	maxRetries int
-	// retryBaseDelay is the backoff base used when no Retry-After is provided.
-	retryBaseDelay time.Duration
 }
 
 func NewClient(
@@ -84,115 +67,43 @@ func NewClient(
 		limiter = rate.NewLimiter(rate.Every(requestDelay), 1)
 	}
 
+	transport := newRateLimitRetryTransport(
+		http.DefaultTransport, limiter, maxRetries, retryBaseDelay,
+	)
+
 	return &Client{
 		bearerToken:      bearerToken,
-		httpClient:       &http.Client{Timeout: timeout},
+		httpClient:       &http.Client{Timeout: timeout, Transport: transport},
 		concurrencyLimit: concurrencyLimit,
 		paginatorLimit:   paginatorLimit,
-		limiter:          limiter,
-		maxRetries:       maxRetries,
-		retryBaseDelay:   retryBaseDelay,
 	}, nil
 }
 
-// doRequest executes req, applying client-side rate limiting and retrying on
-// HTTP 429 (Too Many Requests) with backoff that honors the Retry-After header.
-// It returns the response body together with the final status code. The request
-// must be idempotent and carry no body, since it is replayed on retry.
+// doRequest sends req through the shared client (which rate-limits and retries
+// 429 via its transport) and returns the response body and status. The request
+// must be idempotent, since the transport may replay it.
 func (s *Client) doRequest(
 	ctx context.Context,
 	req *http.Request,
 ) (body []byte, status int, err error) {
-	for attempt := 0; ; attempt++ {
-		if s.limiter != nil {
-			if err := s.limiter.Wait(ctx); err != nil {
-				return nil, 0, err
-			}
-		}
-
-		resp, err := s.httpClient.Do(req)
-		if err != nil {
-			return nil, 0, err
-		}
-		body, err = io.ReadAll(resp.Body)
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
 			slog.Error("could not close response body", "error", closeErr)
 		}
-		if err != nil {
-			return nil, resp.StatusCode, fmt.Errorf(
-				"failed to read body: %w",
-				err,
-			)
-		}
+	}()
 
-		if resp.StatusCode != http.StatusTooManyRequests {
-			return body, resp.StatusCode, nil
-		}
-		if attempt >= s.maxRetries {
-			slog.Warn(
-				"sponsr rate limit retries exhausted, giving up",
-				"url", req.URL.String(),
-				"attempts", attempt+1,
-			)
-			return body, resp.StatusCode, nil
-		}
-
-		wait := s.backoff(resp.Header, attempt)
-		slog.Warn(
-			"rate limited by sponsr, backing off",
-			"url", req.URL.String(),
-			"attempt", attempt+1,
-			"wait", wait,
-		)
-		select {
-		case <-ctx.Done():
-			return nil, resp.StatusCode, ctx.Err()
-		case <-time.After(wait):
-		}
-	}
-}
-
-// backoff returns how long to wait before retrying. It honors the server's
-// Retry-After header when it specifies a usable delay (a non-negative
-// delta-seconds or a future HTTP-date), otherwise it falls back to exponential
-// backoff based on retryBaseDelay. A non-empty but unparseable Retry-After is
-// logged and treated as absent. Every result is capped at retryMaxDelay.
-func (s *Client) backoff(h http.Header, attempt int) time.Duration {
-	if v := h.Get("Retry-After"); v != "" {
-		if d, ok := parseRetryAfter(v); ok {
-			return min(d, retryMaxDelay)
-		}
-		slog.Warn(
-			"unparseable Retry-After header, using exponential backoff",
-			"retry_after", v,
+	body, err = io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp.StatusCode, fmt.Errorf(
+			"failed to read body: %w",
+			err,
 		)
 	}
-
-	// Double the base per attempt, stopping as soon as the cap is reached so
-	// the multiplication can never overflow time.Duration.
-	delay := s.retryBaseDelay
-	for i := 0; i < attempt && delay < retryMaxDelay; i++ {
-		delay *= 2
-	}
-	return min(delay, retryMaxDelay)
-}
-
-// parseRetryAfter interprets a Retry-After header value in either the
-// delta-seconds or HTTP-date form. It reports ok=false when the value is
-// malformed, negative, or refers to a time already in the past.
-func parseRetryAfter(v string) (time.Duration, bool) {
-	if secs, err := strconv.Atoi(v); err == nil {
-		if secs < 0 {
-			return 0, false
-		}
-		return time.Duration(secs) * time.Second, true
-	}
-	if t, err := http.ParseTime(v); err == nil {
-		if d := time.Until(t); d > 0 {
-			return d, true
-		}
-	}
-	return 0, false
+	return body, resp.StatusCode, nil
 }
 
 func PaginatedURL(objectURL string, page, limit int) string {
