@@ -1,7 +1,9 @@
 FROM golang:1.26-bookworm AS playwright-installer
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-RUN go run github.com/playwright-community/playwright-go/cmd/playwright@v0.5700.1 install --with-deps chromium
+# KEEP IN SYNC with the playwright-go version in go.mod (currently v0.6000.0).
+# A mismatch makes the app re-download the driver/browser at runtime.
+RUN go run github.com/playwright-community/playwright-go/cmd/playwright@v0.6000.0 install --with-deps chromium
 
 
 FROM debian:bookworm-slim
@@ -36,10 +38,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && useradd -m appuser
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+# playwright-go locates its driver via PLAYWRIGHT_DRIVER_PATH (checked before the
+# $HOME/.cache fallback), so pointing it at the pre-baked driver makes
+# playwright.Install() a no-op regardless of HOME / --user, instead of a ~130 MB
+# download on every run. The versioned subdir is the playwright CLI version
+# (1.60.0 for playwright-go v0.6000.0) — keep it in sync with go.mod.
+ENV PLAYWRIGHT_DRIVER_PATH=/opt/pw-cache/ms-playwright-go/1.60.0
 COPY --from=playwright-installer /ms-playwright /ms-playwright
-RUN chown -R appuser:appuser /ms-playwright
+COPY --from=playwright-installer /root/.cache/ms-playwright-go /opt/pw-cache/ms-playwright-go
+RUN chown -R appuser:appuser /ms-playwright \
+    && chmod -R a+rX /opt/pw-cache \
+    && mkdir -p /downloads && chown appuser:appuser /downloads
 
 COPY ${TARGETOS}/${TARGETARCH}/sponsrdownloader /usr/local/bin/sponsrdownloader
 
+WORKDIR /downloads
 USER appuser
 ENTRYPOINT ["sponsrdownloader"]

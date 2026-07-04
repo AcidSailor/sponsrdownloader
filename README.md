@@ -41,14 +41,24 @@ sponsrdownloader ... posts --with-filter "episode [0-9]+"
 
 ### Docker
 
+The container writes into `/downloads` (its working directory) — mount your
+target directory there:
+
 ```sh
 docker run --rm \
   -e BEARER_TOKEN=<token> \
   -e SESSION_COOKIE_VALUE=<value> \
   -e PROJECT_SLUG=<slug> \
-  -v ./downloads:/home/appuser \
+  -v ./downloads:/downloads \
   ghcr.io/acidsailor/sponsrdownloader:latest posts
 ```
+
+Downloads land in `./downloads/<project-name>/`.
+
+On **native Linux**, the mounted directory must be writable by uid 1000 (the
+image's `appuser`), or pass `--user "$(id -u):$(id -g)"`. When you override
+`--user`, also set `-e HOME=/tmp` so Chromium has a writable home for its
+temporary profile. On Docker Desktop (macOS/Windows) neither is needed.
 
 ## Obtaining credentials
 
@@ -77,6 +87,7 @@ All flags can be set via environment variables.
 | `--request-delay`        | `REQUEST_DELAY`        |          | `250ms` | Min delay between Sponsr API requests (rate limiting; `0` disables)             |
 | `--max-retries`          | `MAX_RETRIES`          |          | `5`     | Retries on HTTP 429 (Too Many Requests), with Retry-After / backoff             |
 | `--ffmpeg-timeout`       | `FFMPEG_TIMEOUT`       |          | `2h`    | Timeout for ffmpeg video download                                               |
+| `--output-dir`           | `OUTPUT_DIR`           |          | `.`     | Directory to write downloads into                                               |
 
 ## Commands
 
