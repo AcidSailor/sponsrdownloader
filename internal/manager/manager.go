@@ -49,6 +49,7 @@ type Downloadable interface {
 	URL() string
 	Filename() string
 	IsAvailable() bool
+	UpdatedAt() time.Time
 }
 
 type Manager struct {
@@ -174,13 +175,56 @@ func (m *Manager) Close() {
 	}
 }
 
-func (m *Manager) DownloadPDF(ctx context.Context, item Downloadable) error {
-	filename := item.Filename()
-	if err := m.downloadPDF(ctx, item); err != nil {
-		return fmt.Errorf("%w: PDF %q: %w", ErrManager, filename, err)
+// download runs the skip-check, the inner downloader, and the sidecar
+// write for one item. ext is the output extension ("pdf"/"mp4") and
+// label is the human noun used in logs/errors ("PDF"/"video").
+func (m *Manager) download(
+	ctx context.Context,
+	item Downloadable,
+	ext, label string,
+	inner func(context.Context, Downloadable) error,
+) error {
+	outputPath := filepath.Join(
+		m.outputPath, item.Filename()+"."+ext)
+	logger := slog.With("filename", item.Filename())
+
+	done, err := alreadyDownloaded(outputPath, item.UpdatedAt())
+	if err != nil {
+		logger.Warn("could not check existing download", "error", err)
 	}
-	slog.Info("downloaded PDF", "filename", filename)
+	if done {
+		logger.Info("skipped, already downloaded")
+		return nil
+	}
+
+	if err := inner(ctx, item); err != nil {
+		return fmt.Errorf(
+			"%w: %s %q: %w", ErrManager, label, item.Filename(), err)
+	}
+
+	// Record the checksum only when a file was actually produced;
+	// unavailable items are skipped by inner and write nothing.
+	if _, statErr := os.Stat(outputPath); statErr == nil {
+		crc, crcErr := fileCRC32(outputPath)
+		if crcErr != nil {
+			logger.Warn("could not checksum download", "error", crcErr)
+		} else if wErr := writeSidecar(outputPath, sidecar{
+			UpdatedAt: item.UpdatedAt(),
+			CRC32:     crc,
+		}); wErr != nil {
+			logger.Warn("could not write checksum", "error", wErr)
+		}
+	}
+
+	logger.Info("downloaded " + label)
 	return nil
+}
+
+func (m *Manager) DownloadPDF(
+	ctx context.Context,
+	item Downloadable,
+) error {
+	return m.download(ctx, item, "pdf", "PDF", m.downloadPDF)
 }
 
 func (m *Manager) newPage(
@@ -254,13 +298,11 @@ func (m *Manager) downloadPDF(ctx context.Context, item Downloadable) error {
 	return nil
 }
 
-func (m *Manager) DownloadVideo(ctx context.Context, item Downloadable) error {
-	filename := item.Filename()
-	if err := m.downloadVideo(ctx, item); err != nil {
-		return fmt.Errorf("%w: video %q: %w", ErrManager, filename, err)
-	}
-	slog.Info("downloaded video", "filename", filename)
-	return nil
+func (m *Manager) DownloadVideo(
+	ctx context.Context,
+	item Downloadable,
+) error {
+	return m.download(ctx, item, "mp4", "video", m.downloadVideo)
 }
 
 func (m *Manager) downloadVideo(ctx context.Context, item Downloadable) error {
