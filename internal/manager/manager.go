@@ -53,7 +53,7 @@ type Downloadable interface {
 
 type Manager struct {
 	browserContext playwright.BrowserContext
-	projectTitle   string
+	outputPath     string
 	ffmpegPath     string
 	ffmpegTimeout  time.Duration
 	// pw and browser are stored solely for Close().
@@ -69,7 +69,7 @@ func NewManager(
 	if err != nil {
 		return nil, errors.Join(ErrManager, err)
 	}
-	slog.Info("created output folder", "path", projectTitle)
+	slog.Info("created output folder", "path", m.outputPath)
 	return m, nil
 }
 
@@ -77,7 +77,10 @@ func newManager(
 	config configuration.Globals,
 	projectTitle string,
 ) (_ *Manager, err error) {
-	if err = os.MkdirAll(projectTitle, 0o755); err != nil {
+	// Join against OutputDir so downloads land in an explicit, writable
+	// location instead of being created relative to the process cwd.
+	outputPath := filepath.Join(config.OutputDir, projectTitle)
+	if err = os.MkdirAll(outputPath, 0o755); err != nil {
 		return nil, err
 	}
 
@@ -145,7 +148,7 @@ func newManager(
 
 	return &Manager{
 		browserContext: browserContext,
-		projectTitle:   projectTitle,
+		outputPath:     outputPath,
 		ffmpegPath:     ffmpegPath,
 		ffmpegTimeout:  config.FFmpegTimeout,
 		pw:             pw,
@@ -238,7 +241,7 @@ func (m *Manager) downloadPDF(ctx context.Context, item Downloadable) error {
 		)
 	}
 
-	filePath := filepath.Join(m.projectTitle, item.Filename()+".pdf")
+	filePath := filepath.Join(m.outputPath, item.Filename()+".pdf")
 	_, err = page.PDF(playwright.PagePdfOptions{Path: new(filePath)})
 	if err != nil {
 		return fmt.Errorf("could not create PDF: %w", err)
@@ -328,7 +331,12 @@ func (m *Manager) downloadVideo(ctx context.Context, item Downloadable) error {
 		return m3u8Ctx.Err()
 	}
 
-	filePath := filepath.Join(m.projectTitle, item.Filename()+".mp4")
+	filePath := filepath.Join(m.outputPath, item.Filename()+".mp4")
+	// Prefix relative paths with "./" so ffmpeg can't read a leading dash as
+	// a flag; absolute paths are already unambiguous.
+	if !filepath.IsAbs(filePath) {
+		filePath = "./" + filePath
+	}
 
 	// Use a separate, longer timeout for the ffmpeg download phase, derived from parent ctx.
 	ffmpegCtx, ffmpegCancel := context.WithTimeout(ctx, m.ffmpegTimeout)
@@ -341,7 +349,7 @@ func (m *Manager) downloadVideo(ctx context.Context, item Downloadable) error {
 		"-i", m3u8URL,
 		"-c", "copy",
 		"-y",
-		"./"+filePath,
+		filePath,
 	)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		logger.Error("ffmpeg output", "output", string(out))

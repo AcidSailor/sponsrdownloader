@@ -16,6 +16,7 @@ type Globals struct {
 	RequestDelay       time.Duration `help:"Min delay between Sponsr API requests."   env:"REQUEST_DELAY"                        default:"250ms"`
 	MaxRetries         int           `help:"Retries on HTTP 429 (Too Many Requests)." env:"MAX_RETRIES"                          default:"5"`
 	FFmpegTimeout      time.Duration `help:"Timeout for ffmpeg video download."       env:"FFMPEG_TIMEOUT"                       default:"2h"`
+	OutputDir          string        `help:"Directory to write downloads into."       env:"OUTPUT_DIR"                           default:"."`
 }
 
 func (g *Globals) Validate() error {
