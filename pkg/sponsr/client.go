@@ -23,19 +23,33 @@ var reProjectID = regexp.MustCompile(`"project_id":\s*(\d+)`)
 var ErrSponsrClient = errors.New("sponsr client")
 
 type Client struct {
-	rk               *restkit.Client
-	httpClient       *http.Client // shared; used raw for the HTML scrape
+	rk *restkit.Client
+	// httpClient is shared with rk (same transport + rate limiter); the HTML
+	// scrape in projectIDBySlugURL uses it raw, bypassing restkit.
+	httpClient       *http.Client
 	concurrencyLimit int
 	paginatorLimit   int
 }
 
 // bearerAuthHook returns a restkit RequestHook that attaches the bearer token
-// to every request.
+// to every request made through restkit (the JSON API calls); the raw HTML
+// scrape in projectIDBySlugURL bypasses it.
 func bearerAuthHook(token string) restkit.RequestHook {
 	return func(r *http.Request) error {
 		r.Header.Set("Authorization", "Bearer "+token)
 		return nil
 	}
+}
+
+// stripBodyHook removes the request body restkit attaches by default: it
+// marshals a nil payload to the JSON literal `null` and sends it on every
+// request, including GETs. Sponsr's API/CDN may reject a GET that carries a
+// body, so drop it — all of this client's calls are body-less GETs.
+func stripBodyHook(r *http.Request) error {
+	r.Body = http.NoBody
+	r.GetBody = nil
+	r.ContentLength = 0
+	return nil
 }
 
 func NewClient(
@@ -76,7 +90,7 @@ func NewClient(
 	}
 
 	transport := newRateLimitRetryTransport(
-		http.DefaultTransport, limiter, maxRetries, retryBaseDelay,
+		http.DefaultTransport, limiter, maxRetries, defaultRetryBaseDelay,
 	)
 	httpClient := &http.Client{Timeout: timeout, Transport: transport}
 
@@ -85,6 +99,7 @@ func NewClient(
 		restkit.WithName("sponsr"),
 		restkit.WithHTTPClient(httpClient),
 		restkit.WithHook(bearerAuthHook(bearerToken)),
+		restkit.WithHook(stripBodyHook),
 	)
 	if err != nil {
 		return nil, errors.Join(ErrSponsrClient, err)

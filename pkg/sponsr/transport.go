@@ -10,9 +10,10 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// retryBaseDelay is the default exponential-backoff base used when a 429
-// response carries no usable Retry-After header.
-const retryBaseDelay = time.Second
+// defaultRetryBaseDelay is the exponential-backoff base used when a 429
+// response carries no usable Retry-After header. It also backs the constructor
+// guard that rejects a non-positive base.
+const defaultRetryBaseDelay = time.Second
 
 // retryMaxDelay caps a single backoff wait. It bounds both very large
 // Retry-After values and the exponential growth, which would otherwise
@@ -40,6 +41,15 @@ func newRateLimitRetryTransport(
 	if base == nil {
 		base = http.DefaultTransport
 	}
+	// Own the numeric invariants so no caller can build a transport that
+	// busy-spins (retryBaseDelay <= 0 => zero backoff) or silently disables
+	// retries (maxRetries < 0).
+	if retryBaseDelay <= 0 {
+		retryBaseDelay = defaultRetryBaseDelay
+	}
+	if maxRetries < 0 {
+		maxRetries = 0
+	}
 	return &rateLimitRetryTransport{
 		base:           base,
 		limiter:        limiter,
@@ -50,19 +60,22 @@ func newRateLimitRetryTransport(
 
 // RoundTrip applies rate limiting and retries 429 responses with backoff. On
 // exhausted retries it returns the final 429 response (body intact) so the
-// caller can surface it. The request body is rewound via GetBody on each
-// replay, since callers may attach a body even to idempotent GETs.
+// caller can surface it. It never mutates the caller's request: a replay runs
+// on a clone with its body rewound via GetBody, since callers may attach a
+// body even to idempotent GETs.
 func (t *rateLimitRetryTransport) RoundTrip(
 	req *http.Request,
 ) (*http.Response, error) {
 	ctx := req.Context()
 	for attempt := 0; ; attempt++ {
+		attemptReq := req
 		if attempt > 0 && req.GetBody != nil {
 			body, err := req.GetBody()
 			if err != nil {
 				return nil, err
 			}
-			req.Body = body
+			attemptReq = req.Clone(ctx)
+			attemptReq.Body = body
 		}
 
 		if t.limiter != nil {
@@ -71,7 +84,7 @@ func (t *rateLimitRetryTransport) RoundTrip(
 			}
 		}
 
-		resp, err := t.base.RoundTrip(req)
+		resp, err := t.base.RoundTrip(attemptReq)
 		if err != nil {
 			return nil, err
 		}
@@ -94,7 +107,10 @@ func (t *rateLimitRetryTransport) RoundTrip(
 			"attempt", attempt+1,
 			"wait", wait,
 		)
-		// Drain and close the 429 body so the connection can be reused.
+		// Best-effort drain + close of the 429 body so the connection can be
+		// reused; errors here are non-actionable (the body is discarded and
+		// the request is about to be replayed), so they are intentionally
+		// ignored.
 		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
 

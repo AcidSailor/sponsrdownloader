@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -63,6 +64,21 @@ func TestProjectIDBySlug_NotFound(t *testing.T) {
 		srv,
 	).projectIDBySlugURL(context.Background(), srv.URL+"/")
 	require.Error(t, err)
+}
+
+func TestProjectIDBySlug_HTTPError(t *testing.T) {
+	srv := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+		}),
+	)
+	defer srv.Close()
+
+	_, err := newTestClient(
+		srv,
+	).projectIDBySlugURL(context.Background(), srv.URL+"/")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "403")
 }
 
 func TestGetObjects(t *testing.T) {
@@ -179,6 +195,66 @@ func TestGetObjects_429ExhaustsRetries(t *testing.T) {
 	assert.Equal(t, int32(3), calls.Load())
 }
 
+// TestGetObjects_RecoversAfter429 proves a throttled-then-successful request
+// survives the retry and its recovered body still decodes into Objects[T].
+func TestGetObjects_RecoversAfter429(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if calls.Add(1) <= 2 {
+				w.Header().Set("Retry-After", "0")
+				http.Error(w, "throttled", http.StatusTooManyRequests)
+				return
+			}
+			_ = json.NewEncoder(w).
+				Encode(Objects[Post]{Total: 1, List: []Post{{ID: 1, Title: "Recovered"}}, Page: 1, Limit: 20})
+		}),
+	)
+	defer srv.Close()
+
+	client := newTestClientTransport(srv, newRateLimitRetryTransport(
+		srv.Client().Transport, nil, 3, time.Millisecond,
+	))
+
+	got, err := GetObjects[Post](
+		client,
+		context.Background(),
+		"/posts?project_id=1",
+		1,
+		20,
+	)
+	require.NoError(t, err)
+	require.Len(t, got.List, 1)
+	assert.Equal(t, "Recovered", got.List[0].Title)
+	// 2 x 429 + 1 success.
+	assert.Equal(t, int32(3), calls.Load())
+}
+
+// TestGetObjects_OmitsRequestBody guards stripBodyHook: restkit would attach a
+// `null` body to every GET, which Sponsr's API/CDN may reject.
+func TestGetObjects_OmitsRequestBody(t *testing.T) {
+	var gotBody atomic.Value
+	srv := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			b, _ := io.ReadAll(r.Body)
+			gotBody.Store(string(b))
+			_ = json.NewEncoder(w).
+				Encode(Objects[Post]{Total: 0, List: nil, Page: 1, Limit: 20})
+		}),
+	)
+	defer srv.Close()
+
+	_, err := GetObjects[Post](
+		newTestClient(srv),
+		context.Background(),
+		"/posts?project_id=1",
+		1,
+		20,
+	)
+	require.NoError(t, err)
+	assert.Empty(t, gotBody.Load(), "GET must not carry a request body")
+}
+
 // TestGetObjectsAll_RateLimiterSpacesRequests exercises the actual limiter Wait
 // path across the concurrent paginator goroutines, not just its construction.
 func TestGetObjectsAll_RateLimiterSpacesRequests(t *testing.T) {
@@ -264,6 +340,7 @@ func newTestClientTransport(
 		restkit.WithName("sponsr"),
 		restkit.WithHTTPClient(hc),
 		restkit.WithHook(bearerAuthHook("test-token")),
+		restkit.WithHook(stripBodyHook),
 	)
 	if err != nil {
 		panic(err)

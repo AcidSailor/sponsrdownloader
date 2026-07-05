@@ -99,6 +99,33 @@ func TestTransport_RetriesOn429(t *testing.T) {
 	assert.Equal(t, int32(3), calls.Load())
 }
 
+func TestTransport_DoesNotRetryNon429(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls.Add(1)
+			http.Error(w, "boom", http.StatusInternalServerError)
+		}),
+	)
+	defer srv.Close()
+
+	tr := newRateLimitRetryTransport(
+		srv.Client().Transport, nil, 3, time.Millisecond,
+	)
+	resp, err := (&http.Client{Transport: tr}).Get(srv.URL)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	assert.Equal(t, int32(1), calls.Load(), "non-429 must not be retried")
+}
+
+func TestNewTransport_ClampsInvalidParams(t *testing.T) {
+	tr := newRateLimitRetryTransport(nil, nil, -5, -time.Second)
+	assert.NotNil(t, tr.base)
+	assert.Equal(t, 0, tr.maxRetries)
+	assert.Equal(t, defaultRetryBaseDelay, tr.retryBaseDelay)
+}
+
 func TestTransport_429ExhaustsRetries(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(
