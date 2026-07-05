@@ -230,8 +230,10 @@ func TestGetObjects_RecoversAfter429(t *testing.T) {
 	assert.Equal(t, int32(3), calls.Load())
 }
 
-// TestGetObjects_OmitsRequestBody guards stripBodyHook: restkit would attach a
-// `null` body to every GET, which Sponsr's API/CDN may reject.
+// TestGetObjects_OmitsRequestBody guards that GETs stay body-less (restkit
+// >= v0.1.3 sends no body for a nil payload). A regressed dependency that
+// re-attached a `null` body — which Sponsr's API/CDN may reject — would fail
+// here.
 func TestGetObjects_OmitsRequestBody(t *testing.T) {
 	var gotBody atomic.Value
 	srv := httptest.NewServer(
@@ -340,7 +342,6 @@ func newTestClientTransport(
 		restkit.WithName("sponsr"),
 		restkit.WithHTTPClient(hc),
 		restkit.WithHook(bearerAuthHook("test-token")),
-		restkit.WithHook(stripBodyHook),
 	)
 	if err != nil {
 		panic(err)

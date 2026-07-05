@@ -1,5 +1,5 @@
-github.com/acidsailor/restkit v0.1.2 h1:MAZO2e0JvbJDnWDt3WnAqD1CwCkxjJqYBNsexQPRj80=
-github.com/acidsailor/restkit v0.1.2/go.mod h1:7Ukp7T8lXpEUjrj037z6eZk2CIpzF4G0G0mSV8RJtYw=
+github.com/acidsailor/restkit v0.1.3 h1:y4fcIx3m/MvAm+92DdC4R4Oa3zV9fEZgBrp6ITmZ+Tk=
+github.com/acidsailor/restkit v0.1.3/go.mod h1:7Ukp7T8lXpEUjrj037z6eZk2CIpzF4G0G0mSV8RJtYw=
 github.com/alecthomas/assert/v2 v2.11.0 h1:2Q9r3ki8+JYXvGsDyBXwH3LcJ+WK5D0gc5E8vS6K3D0=
 github.com/alecthomas/assert/v2 v2.11.0/go.mod h1:Bze95FyfUr7x34QZrjL+XP+0qgp/zg8yS+TtBj1WA3k=
 github.com/alecthomas/kong v1.15.0 h1:BVJstKbpO73zKpmIu+m/aLRrNmWwxXPIGTNin9VmLVI=

@@ -3,7 +3,7 @@ module github.com/acidsailor/sponsrdownloader
 go 1.26
 
 require (
-	github.com/acidsailor/restkit v0.1.2
+	github.com/acidsailor/restkit v0.1.3
 	github.com/alecthomas/kong v1.15.0
 	github.com/playwright-community/playwright-go v0.6000.0
 	github.com/stretchr/testify v1.11.1

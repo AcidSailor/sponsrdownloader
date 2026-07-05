@@ -41,17 +41,6 @@ func bearerAuthHook(token string) restkit.RequestHook {
 	}
 }
 
-// stripBodyHook removes the request body restkit attaches by default: it
-// marshals a nil payload to the JSON literal `null` and sends it on every
-// request, including GETs. Sponsr's API/CDN may reject a GET that carries a
-// body, so drop it — all of this client's calls are body-less GETs.
-func stripBodyHook(r *http.Request) error {
-	r.Body = http.NoBody
-	r.GetBody = nil
-	r.ContentLength = 0
-	return nil
-}
-
 func NewClient(
 	bearerToken string, timeout time.Duration,
 	concurrencyLimit, paginatorLimit int,
@@ -99,7 +88,6 @@ func NewClient(
 		restkit.WithName("sponsr"),
 		restkit.WithHTTPClient(httpClient),
 		restkit.WithHook(bearerAuthHook(bearerToken)),
-		restkit.WithHook(stripBodyHook),
 	)
 	if err != nil {
 		return nil, errors.Join(ErrSponsrClient, err)
