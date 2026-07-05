@@ -49,6 +49,7 @@ type Downloadable interface {
 	URL() string
 	Filename() string
 	IsAvailable() bool
+	UpdatedAt() time.Time
 }
 
 type Manager struct {
@@ -174,13 +175,67 @@ func (m *Manager) Close() {
 	}
 }
 
-func (m *Manager) DownloadPDF(ctx context.Context, item Downloadable) error {
-	filename := item.Filename()
-	if err := m.downloadPDF(ctx, item); err != nil {
-		return fmt.Errorf("%w: PDF %q: %w", ErrManager, filename, err)
+// downloadReq describes one output format: the file extension (also
+// the noun used in logs/errors) and the function that writes the file
+// to the path handed to it.
+type downloadReq struct {
+	ext          string
+	downloadFunc func(context.Context, Downloadable, string) error
+}
+
+// download runs the skip-check, the download func, and the metadata
+// write for one item. The output path is built here, once, and handed
+// to req.downloadFunc so the file it writes is exactly the file the
+// skip/checksum logic tracks.
+func (m *Manager) download(
+	ctx context.Context,
+	item Downloadable,
+	req downloadReq,
+) error {
+	outputPath := filepath.Join(
+		m.outputPath, item.Filename()+"."+req.ext,
+	)
+	logger := slog.With("filename", item.Filename())
+	fm := newFileMeta(item.UpdatedAt(), outputPath)
+
+	if fm.UpdatedAt.IsZero() {
+		logger.Warn("no updated_at from API; edit-detection disabled")
 	}
-	slog.Info("downloaded PDF", "filename", filename)
+	done, err := fm.upToDate()
+	if err != nil {
+		logger.Warn("could not check existing download", "error", err)
+	}
+	if done {
+		logger.Info("skipped, already downloaded")
+		return nil
+	}
+
+	if err := req.downloadFunc(ctx, item, outputPath); err != nil {
+		// Both %w keep the sentinel and the cause unwrappable, so
+		// errors.Is finds ErrManager and the underlying error.
+		return fmt.Errorf("%w: %s %q: %w",
+			ErrManager, req.ext, item.Filename(), err)
+	}
+	recorded, err := fm.record()
+	if err != nil {
+		return fmt.Errorf(
+			"%w: record %s %q: %w",
+			ErrManager, req.ext, item.Filename(), err)
+	}
+	if recorded {
+		logger.Info("downloaded " + req.ext)
+	}
 	return nil
+}
+
+func (m *Manager) DownloadPDF(
+	ctx context.Context,
+	item Downloadable,
+) error {
+	return m.download(ctx, item, downloadReq{
+		ext:          "pdf",
+		downloadFunc: m.downloadPDF,
+	})
 }
 
 func (m *Manager) newPage(
@@ -208,7 +263,11 @@ func (m *Manager) newPage(
 	return page, nil
 }
 
-func (m *Manager) downloadPDF(ctx context.Context, item Downloadable) error {
+func (m *Manager) downloadPDF(
+	ctx context.Context,
+	item Downloadable,
+	filePath string,
+) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -245,7 +304,6 @@ func (m *Manager) downloadPDF(ctx context.Context, item Downloadable) error {
 		)
 	}
 
-	filePath := filepath.Join(m.outputPath, item.Filename()+".pdf")
 	_, err = page.PDF(playwright.PagePdfOptions{Path: new(filePath)})
 	if err != nil {
 		return fmt.Errorf("could not create PDF: %w", err)
@@ -254,16 +312,21 @@ func (m *Manager) downloadPDF(ctx context.Context, item Downloadable) error {
 	return nil
 }
 
-func (m *Manager) DownloadVideo(ctx context.Context, item Downloadable) error {
-	filename := item.Filename()
-	if err := m.downloadVideo(ctx, item); err != nil {
-		return fmt.Errorf("%w: video %q: %w", ErrManager, filename, err)
-	}
-	slog.Info("downloaded video", "filename", filename)
-	return nil
+func (m *Manager) DownloadVideo(
+	ctx context.Context,
+	item Downloadable,
+) error {
+	return m.download(ctx, item, downloadReq{
+		ext:          "mp4",
+		downloadFunc: m.downloadVideo,
+	})
 }
 
-func (m *Manager) downloadVideo(ctx context.Context, item Downloadable) error {
+func (m *Manager) downloadVideo(
+	ctx context.Context,
+	item Downloadable,
+	filePath string,
+) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -335,7 +398,6 @@ func (m *Manager) downloadVideo(ctx context.Context, item Downloadable) error {
 		return m3u8Ctx.Err()
 	}
 
-	filePath := filepath.Join(m.outputPath, item.Filename()+".mp4")
 	// Prefix relative paths with "./" so ffmpeg can't read a leading dash as
 	// a flag; absolute paths are already unambiguous.
 	if !filepath.IsAbs(filePath) {

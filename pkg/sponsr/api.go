@@ -31,6 +31,7 @@ type Post struct {
 	ID            int       `json:"id"`
 	ProjectID     int       `json:"project_id"`
 	Date          time.Time `json:"date"`
+	Updated       time.Time `json:"updated_at"`
 	Title         string    `json:"title"`
 	Available     bool      `json:"available"`
 	DurationVideo int       `json:"duration_video"`
@@ -51,6 +52,10 @@ func (p *Post) URL() string {
 
 func (p *Post) IsAvailable() bool {
 	return p.Available
+}
+
+func (p *Post) UpdatedAt() time.Time {
+	return p.Updated
 }
 
 var reMultiSpace = regexp.MustCompile(`\s{2,}`)

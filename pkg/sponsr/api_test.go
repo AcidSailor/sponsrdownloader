@@ -1,10 +1,22 @@
 package sponsr
 
 import (
+	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestPostUpdatedAt(t *testing.T) {
+	const body = `{"updated_at":"2026-06-29T18:01:55.000Z"}`
+	var p Post
+	require.NoError(t, json.Unmarshal([]byte(body), &p))
+
+	want := time.Date(2026, 6, 29, 18, 1, 55, 0, time.UTC)
+	assert.True(t, p.UpdatedAt().Equal(want), "got %s", p.UpdatedAt())
+}
 
 func TestSanitizeFilename(t *testing.T) {
 	tests := []struct {
