@@ -65,76 +65,97 @@ func fileCRC32(path string) (crc32c, error) {
 	return crcOf(f)
 }
 
-// fileOp bundles one output file's path with what we record about it:
-// the post's edit time (server change-signal) and the file's crc32c
-// (integrity). The metadata is stored as JSON in a file beside the
-// output under .checksums/.
-type fileOp struct {
-	UpdatedAt time.Time `json:"updated_at"`
-	CRC32     crc32c    `json:"crc32"`
-	path      string
-}
-
-// newFileOp describes the output file at outputPath as of updatedAt.
-// The checksum is filled in later by record.
-func newFileOp(updatedAt time.Time, outputPath string) *fileOp {
-	return &fileOp{UpdatedAt: updatedAt, path: outputPath}
-}
-
-// metaPath maps the output file path to its metadata file path, e.g.
+// metaPathFor maps an output file path to its metadata file path, e.g.
 // dir/name.pdf -> dir/.checksums/name.pdf.json.
-func (fo *fileOp) metaPath() string {
-	dir := filepath.Dir(fo.path)
-	base := filepath.Base(fo.path)
+func metaPathFor(pathToFile string) string {
+	dir := filepath.Dir(pathToFile)
+	base := filepath.Base(pathToFile)
 	return filepath.Join(dir, checksumDir, base+".json")
 }
 
-// read loads fo's metadata file into fo, leaving fo.path intact.
-func (fo *fileOp) read() error {
-	data, err := os.ReadFile(fo.metaPath())
+// fileMeta bundles one output file's path with what we record about it:
+// the post's edit time (server change-signal) and the file's crc32c
+// (integrity). The metadata is stored as JSON at pathToMeta, beside the
+// output under .checksums/. pathToMeta is a *string so a fileMeta built
+// only to read existing metadata can share a known path without
+// recomputing it; nil means "derive it from pathToFile".
+type fileMeta struct {
+	UpdatedAt  time.Time `json:"updated_at"`
+	CRC32      crc32c    `json:"crc32"`
+	pathToFile string
+	pathToMeta *string
+}
+
+// newFileMeta describes the output file at pathToFile as of updatedAt.
+// The checksum is filled in later by record.
+func newFileMeta(updatedAt time.Time, pathToFile string) *fileMeta {
+	mp := metaPathFor(pathToFile)
+	return &fileMeta{
+		UpdatedAt:  updatedAt,
+		pathToFile: pathToFile,
+		pathToMeta: &mp,
+	}
+}
+
+// metaPath returns fm's metadata file path, deriving it from pathToFile
+// when pathToMeta is unset.
+func (fm *fileMeta) metaPath() string {
+	if fm.pathToMeta == nil {
+		mp := metaPathFor(fm.pathToFile)
+		fm.pathToMeta = &mp
+	}
+	return *fm.pathToMeta
+}
+
+// read loads fm's metadata file into fm, leaving fm's paths intact.
+func (fm *fileMeta) read() error {
+	data, err := os.ReadFile(fm.metaPath())
 	if err != nil {
 		return err
 	}
-	return json.Unmarshal(data, fo)
+	return json.Unmarshal(data, fm)
 }
 
-// write persists fo's metadata beside fo.path, under .checksums/,
-// creating that directory as needed.
-func (fo *fileOp) write() error {
-	path := fo.metaPath()
+// write persists fm's metadata to fm.metaPath (beside the output file,
+// under .checksums/), creating that directory as needed.
+func (fm *fileMeta) write() error {
+	path := fm.metaPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	data, err := json.Marshal(fo)
+	data, err := json.Marshal(fm)
 	if err != nil {
 		return err
 	}
 	return os.WriteFile(path, data, 0o644)
 }
 
-// upToDate reports whether fo.path already holds a good, current copy
-// for fo.UpdatedAt: the file exists, its recorded updated_at matches,
-// and its crc32c matches the recorded checksum. A missing file or a
-// missing metadata file yields (false, nil) so the caller re-downloads;
-// other errors (unreadable file, corrupt metadata) are returned so the
-// caller can log them. A zero UpdatedAt is treated as "no edit signal"
-// and always yields false. The updated_at check runs before the file is
-// hashed, so an edited post is settled without reading the file.
-func (fo *fileOp) upToDate() (bool, error) {
-	if fo.UpdatedAt.IsZero() {
+// upToDate reports whether fm.pathToFile already holds a good, current
+// copy for fm.UpdatedAt: the file exists, its recorded updated_at
+// matches, and its crc32c matches the recorded checksum. A missing file
+// or a missing metadata file yields (false, nil) so the caller
+// re-downloads; other errors (unreadable file, corrupt metadata) are
+// returned so the caller can log them. A zero UpdatedAt is treated as
+// "no edit signal" and always yields false. The updated_at check runs
+// before the file is hashed, so an edited post is settled without
+// reading the file.
+func (fm *fileMeta) upToDate() (bool, error) {
+	if fm.UpdatedAt.IsZero() {
 		return false, nil
 	}
-	stored := fileOp{path: fo.path}
+	// Share fm's metadata path so the on-disk record is found without
+	// recomputing (or losing) it.
+	stored := fileMeta{pathToMeta: fm.pathToMeta}
 	if err := stored.read(); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return false, nil
 		}
 		return false, err
 	}
-	if !stored.UpdatedAt.Equal(fo.UpdatedAt) {
+	if !stored.UpdatedAt.Equal(fm.UpdatedAt) {
 		return false, nil
 	}
-	crc, err := fileCRC32(fo.path)
+	crc, err := fileCRC32(fm.pathToFile)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return false, nil
@@ -144,34 +165,39 @@ func (fo *fileOp) upToDate() (bool, error) {
 	return crc == stored.CRC32, nil
 }
 
-// record hashes fo.path and writes fo (stamped with that checksum) as
-// its metadata file. A missing file is not an error — an unavailable
-// item is skipped by the download func and produces nothing to record.
-// A zero-byte file is a download that failed without erroring and is
-// reported so the caller can fail fast rather than caching garbage. The
-// file is opened once for both the size check and the hash.
-func (fo *fileOp) record() error {
-	f, err := os.Open(fo.path)
+// record hashes fm.pathToFile and writes fm (stamped with that
+// checksum) as its metadata file. It reports whether a metadata file
+// was written: false with a nil error when the output file is absent —
+// an unavailable item is skipped by the download func and produces
+// nothing to record. A zero-byte file is a download that failed without
+// erroring and is reported so the caller can fail fast rather than
+// caching garbage. The file is opened once for both the size check and
+// the hash.
+func (fm *fileMeta) record() (bool, error) {
+	f, err := os.Open(fm.pathToFile)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil
+			return false, nil
 		}
-		return err
+		return false, err
 	}
 	defer func() { _ = f.Close() }()
 
 	info, err := f.Stat()
 	if err != nil {
-		return err
+		return false, err
 	}
 	if info.Size() == 0 {
-		return errors.New("download produced an empty file")
+		return false, errors.New("download produced an empty file")
 	}
 
 	crc, err := crcOf(f)
 	if err != nil {
-		return err
+		return false, err
 	}
-	fo.CRC32 = crc
-	return fo.write()
+	fm.CRC32 = crc
+	if err := fm.write(); err != nil {
+		return false, err
+	}
+	return true, nil
 }

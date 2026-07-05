@@ -26,20 +26,31 @@ func TestFileCRC32(t *testing.T) {
 }
 
 func TestMetaPath(t *testing.T) {
-	fm := newFileOp(time.Time{}, filepath.Join("out", "My Post.pdf"))
+	fm := newFileMeta(time.Time{}, filepath.Join("out", "My Post.pdf"))
 	want := filepath.Join("out", ".checksums", "My Post.pdf.json")
 	assert.Equal(t, want, fm.metaPath())
 }
 
-func TestFileOpRoundTrip(t *testing.T) {
+func TestCRC32Unmarshal(t *testing.T) {
+	t.Run("non-hex string -> error", func(t *testing.T) {
+		var c crc32c
+		assert.Error(t, c.UnmarshalJSON([]byte(`"zzzzzzzz"`)))
+	})
+	t.Run("json number -> error", func(t *testing.T) {
+		var c crc32c
+		assert.Error(t, c.UnmarshalJSON([]byte(`123`)))
+	})
+}
+
+func TestFileMetaRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	out := filepath.Join(dir, "post.pdf")
-	in := newFileOp(
+	in := newFileMeta(
 		time.Date(2026, 6, 29, 18, 1, 55, 0, time.UTC), out)
 	in.CRC32 = 0x1a2b3c4d
 	require.NoError(t, in.write())
 
-	got := newFileOp(time.Time{}, out)
+	got := newFileMeta(time.Time{}, out)
 	require.NoError(t, got.read())
 	assert.True(t, got.UpdatedAt.Equal(in.UpdatedAt))
 	assert.Equal(t, in.CRC32, got.CRC32)
@@ -50,7 +61,7 @@ func TestFileOpRoundTrip(t *testing.T) {
 func TestMetaJSONIsHex(t *testing.T) {
 	dir := t.TempDir()
 	out := filepath.Join(dir, "post.pdf")
-	fm := newFileOp(
+	fm := newFileMeta(
 		time.Date(2026, 6, 29, 18, 1, 55, 0, time.UTC), out)
 	fm.CRC32 = 0x1a2b3c4d
 	require.NoError(t, fm.write())
@@ -62,13 +73,13 @@ func TestMetaJSONIsHex(t *testing.T) {
 
 func TestReadMissing(t *testing.T) {
 	dir := t.TempDir()
-	fm := newFileOp(time.Time{}, filepath.Join(dir, "nope.pdf"))
+	fm := newFileMeta(time.Time{}, filepath.Join(dir, "nope.pdf"))
 	assert.Error(t, fm.read())
 }
 
 func TestReadCorrupt(t *testing.T) {
 	dir := t.TempDir()
-	fm := newFileOp(time.Time{}, filepath.Join(dir, "post.pdf"))
+	fm := newFileMeta(time.Time{}, filepath.Join(dir, "post.pdf"))
 	require.NoError(t,
 		os.MkdirAll(filepath.Dir(fm.metaPath()), 0o755))
 	require.NoError(t,
@@ -77,8 +88,8 @@ func TestReadCorrupt(t *testing.T) {
 	assert.Error(t, fm.read())
 }
 
-// writeFileWithMeta writes an output file plus a metadata recording a
-// (possibly wrong) crc, and returns the output path.
+// writeFileWithMeta writes an output file plus a metadata file recording
+// a (possibly wrong) crc, and returns the output path.
 func writeFileWithMeta(
 	t *testing.T, dir, name, content string,
 	updatedAt time.Time, crc crc32c,
@@ -86,13 +97,13 @@ func writeFileWithMeta(
 	t.Helper()
 	out := filepath.Join(dir, name)
 	require.NoError(t, os.WriteFile(out, []byte(content), 0o644))
-	fm := newFileOp(updatedAt, out)
+	fm := newFileMeta(updatedAt, out)
 	fm.CRC32 = crc
 	require.NoError(t, fm.write())
 	return out
 }
 
-func TestFileOpUpToDate(t *testing.T) {
+func TestFileMetaUpToDate(t *testing.T) {
 	updated := time.Date(2026, 6, 29, 18, 1, 55, 0, time.UTC)
 	later := updated.Add(time.Hour)
 
@@ -105,14 +116,14 @@ func TestFileOpUpToDate(t *testing.T) {
 		out = writeFileWithMeta(t, dir, "post.pdf", "data",
 			updated, crc)
 
-		ok, err := newFileOp(updated, out).upToDate()
+		ok, err := newFileMeta(updated, out).upToDate()
 		require.NoError(t, err)
 		assert.True(t, ok)
 	})
 
 	t.Run("file absent -> false", func(t *testing.T) {
 		dir := t.TempDir()
-		fm := newFileOp(updated, filepath.Join(dir, "missing.pdf"))
+		fm := newFileMeta(updated, filepath.Join(dir, "missing.pdf"))
 		ok, err := fm.upToDate()
 		require.NoError(t, err)
 		assert.False(t, ok)
@@ -124,12 +135,12 @@ func TestFileOpUpToDate(t *testing.T) {
 		require.NoError(t, os.WriteFile(out, []byte("data"), 0o644))
 		crc, err := fileCRC32(out)
 		require.NoError(t, err)
-		// Recorded crc is CORRECT; only the edit-time differs, so a
+		// Metadata crc is CORRECT; only the edit-time differs, so a
 		// false result proves updated_at is checked first.
 		out = writeFileWithMeta(t, dir, "post.pdf", "data",
 			updated, crc)
 
-		ok, err := newFileOp(later, out).upToDate()
+		ok, err := newFileMeta(later, out).upToDate()
 		require.NoError(t, err)
 		assert.False(t, ok)
 	})
@@ -139,7 +150,7 @@ func TestFileOpUpToDate(t *testing.T) {
 		out := writeFileWithMeta(
 			t, dir, "post.pdf", "data", updated, 0xdeadbeef)
 
-		ok, err := newFileOp(updated, out).upToDate()
+		ok, err := newFileMeta(updated, out).upToDate()
 		require.NoError(t, err)
 		assert.False(t, ok)
 	})
@@ -149,8 +160,23 @@ func TestFileOpUpToDate(t *testing.T) {
 		out := filepath.Join(dir, "post.pdf")
 		require.NoError(t, os.WriteFile(out, []byte("data"), 0o644))
 
-		ok, err := newFileOp(updated, out).upToDate()
+		ok, err := newFileMeta(updated, out).upToDate()
 		require.NoError(t, err)
+		assert.False(t, ok)
+	})
+
+	t.Run("corrupt metadata -> error", func(t *testing.T) {
+		dir := t.TempDir()
+		out := filepath.Join(dir, "post.pdf")
+		require.NoError(t, os.WriteFile(out, []byte("data"), 0o644))
+		fm := newFileMeta(updated, out)
+		require.NoError(t,
+			os.MkdirAll(filepath.Dir(fm.metaPath()), 0o755))
+		require.NoError(t,
+			os.WriteFile(fm.metaPath(), []byte("{bad"), 0o644))
+
+		ok, err := fm.upToDate()
+		require.Error(t, err)
 		assert.False(t, ok)
 	})
 
@@ -163,13 +189,13 @@ func TestFileOpUpToDate(t *testing.T) {
 		out = writeFileWithMeta(t, dir, "post.pdf", "data",
 			time.Time{}, crc)
 
-		ok, err := newFileOp(time.Time{}, out).upToDate()
+		ok, err := newFileMeta(time.Time{}, out).upToDate()
 		require.NoError(t, err)
 		assert.False(t, ok)
 	})
 }
 
-func TestFileOpRecord(t *testing.T) {
+func TestFileMetaRecord(t *testing.T) {
 	updated := time.Date(2026, 6, 29, 18, 1, 55, 0, time.UTC)
 
 	t.Run("real file -> writes matching metadata", func(t *testing.T) {
@@ -177,29 +203,35 @@ func TestFileOpRecord(t *testing.T) {
 		out := filepath.Join(dir, "post.pdf")
 		require.NoError(t, os.WriteFile(out, []byte("data"), 0o644))
 
-		require.NoError(t, newFileOp(updated, out).record())
+		recorded, err := newFileMeta(updated, out).record()
+		require.NoError(t, err)
+		assert.True(t, recorded)
 
 		wantCRC, err := fileCRC32(out)
 		require.NoError(t, err)
-		got := newFileOp(time.Time{}, out)
+		got := newFileMeta(time.Time{}, out)
 		require.NoError(t, got.read())
 		assert.True(t, got.UpdatedAt.Equal(updated))
 		assert.Equal(t, wantCRC, got.CRC32)
 	})
 
-	t.Run("missing file -> no metadata, no error", func(t *testing.T) {
+	t.Run("missing file -> not recorded, no error", func(t *testing.T) {
 		dir := t.TempDir()
-		fm := newFileOp(updated, filepath.Join(dir, "gone.pdf"))
-		require.NoError(t, fm.record())
+		fm := newFileMeta(updated, filepath.Join(dir, "gone.pdf"))
+		recorded, err := fm.record()
+		require.NoError(t, err)
+		assert.False(t, recorded)
 		assert.NoFileExists(t, fm.metaPath())
 	})
 
-	t.Run("empty file -> error, no metadata", func(t *testing.T) {
+	t.Run("empty file -> error, not recorded", func(t *testing.T) {
 		dir := t.TempDir()
 		out := filepath.Join(dir, "empty.pdf")
 		require.NoError(t, os.WriteFile(out, nil, 0o644))
-		fm := newFileOp(updated, out)
-		assert.Error(t, fm.record())
+		fm := newFileMeta(updated, out)
+		recorded, err := fm.record()
+		assert.Error(t, err)
+		assert.False(t, recorded)
 		assert.NoFileExists(t, fm.metaPath())
 	})
 }

@@ -45,7 +45,7 @@ func TestDownloadSkipsIntactCurrentFile(t *testing.T) {
 	}))
 	assert.Equal(t, 1, calls)
 	assert.FileExists(t,
-		newFileOp(time.Time{},
+		newFileMeta(time.Time{},
 			filepath.Join(dir, "post.pdf")).metaPath())
 
 	// Second run: intact + current -> skipped, inner not called.
@@ -87,7 +87,7 @@ func TestDownloadWrapsInnerErrorAndSkipsMeta(t *testing.T) {
 	assert.ErrorIs(t, err, ErrManager)
 	assert.ErrorIs(t, err, wantErr)
 	assert.NoFileExists(t,
-		newFileOp(time.Time{},
+		newFileMeta(time.Time{},
 			filepath.Join(dir, "post.pdf")).metaPath())
 }
 
@@ -109,7 +109,7 @@ func TestDownloadWritesNoMetaWhenNoFileProduced(t *testing.T) {
 			downloadFunc: inner,
 		}))
 	assert.NoFileExists(t,
-		newFileOp(time.Time{},
+		newFileMeta(time.Time{},
 			filepath.Join(dir, "post.pdf")).metaPath())
 }
 
@@ -136,4 +136,57 @@ func TestDownloadNeverSkipsWithoutUpdatedAt(t *testing.T) {
 		downloadFunc: inner,
 	}))
 	assert.Equal(t, 2, calls)
+}
+
+// A download func that reports success but writes an empty file must
+// fail fast (wrapped with ErrManager) rather than caching garbage.
+func TestDownloadFailsOnEmptyOutput(t *testing.T) {
+	dir := t.TempDir()
+	m := &Manager{outputPath: dir}
+	item := fakeItem{
+		filename:  "post",
+		updatedAt: time.Date(2026, 6, 29, 18, 1, 55, 0, time.UTC),
+	}
+
+	inner := func(_ context.Context, _ Downloadable, path string) error {
+		return os.WriteFile(path, nil, 0o644)
+	}
+
+	err := m.download(context.Background(), item, downloadReq{
+		ext:          "pdf",
+		downloadFunc: inner,
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrManager)
+	assert.NoFileExists(t,
+		newFileMeta(time.Time{},
+			filepath.Join(dir, "post.pdf")).metaPath())
+}
+
+// Corrupt existing metadata must not cause a skip: upToDate returns an
+// error, download logs it and proceeds to re-download.
+func TestDownloadReDownloadsOnCorruptMeta(t *testing.T) {
+	dir := t.TempDir()
+	m := &Manager{outputPath: dir}
+	item := fakeItem{
+		filename:  "post",
+		updatedAt: time.Date(2026, 6, 29, 18, 1, 55, 0, time.UTC),
+	}
+	out := filepath.Join(dir, "post.pdf")
+	require.NoError(t, os.WriteFile(out, []byte("data"), 0o644))
+	fm := newFileMeta(time.Time{}, out)
+	require.NoError(t, os.MkdirAll(filepath.Dir(fm.metaPath()), 0o755))
+	require.NoError(t, os.WriteFile(fm.metaPath(), []byte("{bad"), 0o644))
+
+	calls := 0
+	inner := func(_ context.Context, _ Downloadable, path string) error {
+		calls++
+		return os.WriteFile(path, []byte("data"), 0o644)
+	}
+
+	require.NoError(t, m.download(context.Background(), item, downloadReq{
+		ext:          "pdf",
+		downloadFunc: inner,
+	}))
+	assert.Equal(t, 1, calls)
 }

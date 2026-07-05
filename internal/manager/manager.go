@@ -196,7 +196,7 @@ func (m *Manager) download(
 		m.outputPath, item.Filename()+"."+req.ext,
 	)
 	logger := slog.With("filename", item.Filename())
-	fm := newFileOp(item.UpdatedAt(), outputPath)
+	fm := newFileMeta(item.UpdatedAt(), outputPath)
 
 	if fm.UpdatedAt.IsZero() {
 		logger.Warn("no updated_at from API; edit-detection disabled")
@@ -216,13 +216,15 @@ func (m *Manager) download(
 		return fmt.Errorf("%w: %s %q: %w",
 			ErrManager, req.ext, item.Filename(), err)
 	}
-	if err := fm.record(); err != nil {
+	recorded, err := fm.record()
+	if err != nil {
 		return fmt.Errorf(
 			"%w: record %s %q: %w",
 			ErrManager, req.ext, item.Filename(), err)
 	}
-
-	logger.Info("downloaded " + req.ext)
+	if recorded {
+		logger.Info("downloaded " + req.ext)
+	}
 	return nil
 }
 
