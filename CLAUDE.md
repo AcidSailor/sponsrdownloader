@@ -40,7 +40,8 @@ Data flows: **`cmd` (CLI) → `pkg/sponsr` (API) → `internal/manager` (render/
 
 - **`pkg/sponsr/`** — HTTP client for the Sponsr JSON API (`api/v2`).
   - `GetObjectsAll[T]` is the generic paginator: fetches page 1, computes total pages, then fans out remaining pages concurrently (bounded by `concurrencyLimit`) into a mutex-guarded slice.
-  - `doRequest` centralizes all requests: applies a `golang.org/x/time/rate` limiter (min spacing = `--request-delay`, burst 1, shared across goroutines) and retries HTTP 429 up to `--max-retries` with backoff that honors `Retry-After` (delta-seconds or HTTP-date), else exponential, capped at `retryMaxDelay`.
+  - The JSON transport (request building, bearer auth, decoding, typed errors) is delegated to [`restkit`](https://github.com/acidsailor/restkit) (≥ v0.1.3, which sends no request body for body-less GETs); `NewClient` wires it via `WithHTTPClient`/`WithHook`.
+  - `transport.go` holds `rateLimitRetryTransport`, an `http.RoundTripper` shared by both restkit and the raw HTML scrape: it applies a `golang.org/x/time/rate` limiter (min spacing = `--request-delay`, burst 1, shared across goroutines) and retries HTTP 429 up to `--max-retries` with backoff that honors `Retry-After` (delta-seconds or HTTP-date), else exponential, capped at `retryMaxDelay`.
   - `ProjectIDBySlug` scrapes the numeric `project_id` out of the project's HTML page via regex (there is no slug→id API endpoint).
   - `api.go` holds the API types + endpoint constants, and `Post.Filename()`/`sanitizeTitle` (filesystem-safe naming: strips `/\:*?"<>|`, control chars, collapses whitespace).
 

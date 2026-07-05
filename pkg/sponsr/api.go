@@ -9,11 +9,13 @@ import (
 )
 
 const (
-	Domain           = "sponsr.ru"
-	Endpoint         = "https://" + Domain
-	ApiEndpoint      = Endpoint + "/api/v2"
-	PostsEndpoint    = ApiEndpoint + "/content/posts"
-	ProjectsEndpoint = ApiEndpoint + "/content/projects"
+	Domain      = "sponsr.ru"
+	Endpoint    = "https://" + Domain
+	ApiEndpoint = Endpoint + "/api/v2"
+	// PostsPath and ProjectsPath are relative to ApiEndpoint (the restkit
+	// client's base URL).
+	PostsPath    = "/content/posts"
+	ProjectsPath = "/content/projects"
 )
 
 type Objects[T any] struct {

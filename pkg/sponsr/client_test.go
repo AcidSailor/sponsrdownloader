@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/acidsailor/restkit"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/time/rate"
@@ -30,13 +32,6 @@ func TestCalculatePages(t *testing.T) {
 	for _, tt := range tests {
 		assert.Equal(t, tt.want, CalculatePages(tt.total, tt.limit))
 	}
-}
-
-func TestPaginatedURL(t *testing.T) {
-	got := PaginatedURL("https://example.com/api?foo=bar", 2, 20)
-	assert.Contains(t, got, "page=2")
-	assert.Contains(t, got, "limit=20")
-	assert.Contains(t, got, "foo=bar")
 }
 
 func TestProjectIDBySlug(t *testing.T) {
@@ -71,6 +66,21 @@ func TestProjectIDBySlug_NotFound(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestProjectIDBySlug_HTTPError(t *testing.T) {
+	srv := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+		}),
+	)
+	defer srv.Close()
+
+	_, err := newTestClient(
+		srv,
+	).projectIDBySlugURL(context.Background(), srv.URL+"/")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "403")
+}
+
 func TestGetObjects(t *testing.T) {
 	posts := []Post{
 		{ID: 1, Title: "Post One", Available: true, Date: time.Now()},
@@ -87,7 +97,7 @@ func TestGetObjects(t *testing.T) {
 	got, err := GetObjects[Post](
 		newTestClient(srv),
 		context.Background(),
-		srv.URL+"/posts?project_id=1",
+		"/posts?project_id=1",
 		1,
 		20,
 	)
@@ -133,7 +143,7 @@ func TestGetObjectsAll_Pagination(t *testing.T) {
 	got, err := GetObjectsAll[Post](
 		client,
 		context.Background(),
-		srv.URL+"/posts?project_id=1",
+		"/posts?project_id=1",
 	)
 	require.NoError(t, err)
 	assert.Len(t, got, total)
@@ -150,42 +160,11 @@ func TestGetObjects_HTTPError(t *testing.T) {
 	_, err := GetObjects[Post](
 		newTestClient(srv),
 		context.Background(),
-		srv.URL+"/posts?project_id=1",
+		"/posts?project_id=1",
 		1,
 		20,
 	)
 	require.Error(t, err)
-}
-
-func TestGetObjects_RetriesOn429(t *testing.T) {
-	var calls atomic.Int32
-	srv := httptest.NewServer(
-		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Fail the first two attempts with 429, then succeed.
-			if calls.Add(1) <= 2 {
-				w.Header().Set("Retry-After", "0")
-				http.Error(w, "throttled", http.StatusTooManyRequests)
-				return
-			}
-			_ = json.NewEncoder(w).
-				Encode(Objects[Post]{Total: 1, List: []Post{{ID: 1}}, Page: 1, Limit: 20})
-		}),
-	)
-	defer srv.Close()
-
-	client := newTestClient(srv)
-	client.maxRetries = 3
-
-	got, err := GetObjects[Post](
-		client,
-		context.Background(),
-		srv.URL+"/posts?project_id=1",
-		1,
-		20,
-	)
-	require.NoError(t, err)
-	require.Len(t, got.List, 1)
-	assert.Equal(t, int32(3), calls.Load())
 }
 
 func TestGetObjects_429ExhaustsRetries(t *testing.T) {
@@ -198,88 +177,84 @@ func TestGetObjects_429ExhaustsRetries(t *testing.T) {
 	)
 	defer srv.Close()
 
-	client := newTestClient(srv)
-	client.maxRetries = 2
+	client := newTestClientTransport(srv, newRateLimitRetryTransport(
+		srv.Client().Transport, nil, 2, time.Millisecond,
+	))
 
 	_, err := GetObjects[Post](
 		client,
 		context.Background(),
-		srv.URL+"/posts?project_id=1",
+		"/posts?project_id=1",
 		1,
 		20,
 	)
 	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrSponsrClient)
 	assert.Contains(t, err.Error(), "429")
 	// 1 initial attempt + 2 retries.
 	assert.Equal(t, int32(3), calls.Load())
 }
 
-func TestBackoff_RetryAfterSeconds(t *testing.T) {
-	c := &Client{retryBaseDelay: time.Second}
-	h := http.Header{}
-	h.Set("Retry-After", "3")
-	assert.Equal(t, 3*time.Second, c.backoff(h, 0))
-}
-
-func TestBackoff_RetryAfterHTTPDate(t *testing.T) {
-	c := &Client{retryBaseDelay: time.Second}
-	h := http.Header{}
-	h.Set(
-		"Retry-After",
-		time.Now().Add(2*time.Second).UTC().Format(http.TimeFormat),
+// TestGetObjects_RecoversAfter429 proves a throttled-then-successful request
+// survives the retry and its recovered body still decodes into Objects[T].
+func TestGetObjects_RecoversAfter429(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if calls.Add(1) <= 2 {
+				w.Header().Set("Retry-After", "0")
+				http.Error(w, "throttled", http.StatusTooManyRequests)
+				return
+			}
+			_ = json.NewEncoder(w).
+				Encode(Objects[Post]{Total: 1, List: []Post{{ID: 1, Title: "Recovered"}}, Page: 1, Limit: 20})
+		}),
 	)
-	// http.TimeFormat has second granularity, so the remaining delay lands
-	// between ~1s and 2s.
-	d := c.backoff(h, 0)
-	assert.Positive(t, d)
-	assert.Greater(t, d, 500*time.Millisecond)
-	assert.LessOrEqual(t, d, 2*time.Second)
+	defer srv.Close()
+
+	client := newTestClientTransport(srv, newRateLimitRetryTransport(
+		srv.Client().Transport, nil, 3, time.Millisecond,
+	))
+
+	got, err := GetObjects[Post](
+		client,
+		context.Background(),
+		"/posts?project_id=1",
+		1,
+		20,
+	)
+	require.NoError(t, err)
+	require.Len(t, got.List, 1)
+	assert.Equal(t, "Recovered", got.List[0].Title)
+	// 2 x 429 + 1 success.
+	assert.Equal(t, int32(3), calls.Load())
 }
 
-func TestBackoff_RetryAfterFallbacks(t *testing.T) {
-	c := &Client{retryBaseDelay: time.Second}
-	// Malformed, negative, and unparseable values fall back to exponential
-	// backoff (retryBaseDelay at attempt 0).
-	for _, v := range []string{"abc", "-5", "-1", "not-a-date"} {
-		h := http.Header{}
-		h.Set("Retry-After", v)
-		assert.Equal(
-			t,
-			time.Second,
-			c.backoff(h, 0),
-			"Retry-After %q should fall back to exponential backoff",
-			v,
-		)
-	}
-	// Retry-After: 0 is honored as "retry immediately". The client-side
-	// limiter still paces the next attempt.
-	h := http.Header{}
-	h.Set("Retry-After", "0")
-	assert.Equal(t, time.Duration(0), c.backoff(h, 0))
-}
+// TestGetObjects_OmitsRequestBody guards that GETs stay body-less (restkit
+// >= v0.1.3 sends no body for a nil payload). A regressed dependency that
+// re-attached a `null` body — which Sponsr's API/CDN may reject — would fail
+// here.
+func TestGetObjects_OmitsRequestBody(t *testing.T) {
+	var gotBody atomic.Value
+	srv := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			b, _ := io.ReadAll(r.Body)
+			gotBody.Store(string(b))
+			_ = json.NewEncoder(w).
+				Encode(Objects[Post]{Total: 0, List: nil, Page: 1, Limit: 20})
+		}),
+	)
+	defer srv.Close()
 
-func TestBackoff_Exponential(t *testing.T) {
-	c := &Client{retryBaseDelay: time.Second}
-	assert.Equal(t, time.Second, c.backoff(http.Header{}, 0))
-	assert.Equal(t, 2*time.Second, c.backoff(http.Header{}, 1))
-	assert.Equal(t, 4*time.Second, c.backoff(http.Header{}, 2))
-}
-
-func TestBackoff_CapsLargeDelays(t *testing.T) {
-	c := &Client{retryBaseDelay: time.Second}
-
-	// A very large Retry-After is clamped to retryMaxDelay.
-	h := http.Header{}
-	h.Set("Retry-After", "100000")
-	assert.Equal(t, retryMaxDelay, c.backoff(h, 0))
-
-	// Exponential growth is capped and never overflows to a non-positive
-	// duration, regardless of how many retries are configured.
-	for attempt := range 200 {
-		d := c.backoff(http.Header{}, attempt)
-		assert.Positive(t, d, "attempt %d must not overflow", attempt)
-		assert.LessOrEqual(t, d, retryMaxDelay)
-	}
+	_, err := GetObjects[Post](
+		newTestClient(srv),
+		context.Background(),
+		"/posts?project_id=1",
+		1,
+		20,
+	)
+	require.NoError(t, err)
+	assert.Empty(t, gotBody.Load(), "GET must not carry a request body")
 }
 
 // TestGetObjectsAll_RateLimiterSpacesRequests exercises the actual limiter Wait
@@ -300,13 +275,17 @@ func TestGetObjectsAll_RateLimiterSpacesRequests(t *testing.T) {
 	defer srv.Close()
 
 	const delay = 25 * time.Millisecond
-	client := newTestClient(srv)
-	client.limiter = rate.NewLimiter(rate.Every(delay), 1)
+	client := newTestClientTransport(srv, newRateLimitRetryTransport(
+		srv.Client().Transport,
+		rate.NewLimiter(rate.Every(delay), 1),
+		0,
+		time.Millisecond,
+	))
 
 	_, err := GetObjectsAll[Post](
 		client,
 		context.Background(),
-		srv.URL+"/posts?project_id=1",
+		"/posts?project_id=1",
 	)
 	require.NoError(t, err)
 
@@ -329,54 +308,18 @@ func TestGetObjectsAll_RateLimiterSpacesRequests(t *testing.T) {
 	)
 }
 
-// TestDoRequest_ContextCanceledDuringBackoff ensures a cancelled context aborts
-// the retry sleep promptly instead of blocking for the full backoff.
-func TestDoRequest_ContextCanceledDuringBackoff(t *testing.T) {
-	srv := httptest.NewServer(
-		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			http.Error(w, "throttled", http.StatusTooManyRequests)
-		}),
-	)
-	defer srv.Close()
-
-	client := newTestClient(srv)
-	client.maxRetries = 100
-	client.retryBaseDelay = time.Hour // long backoff we expect to interrupt
-
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		time.Sleep(20 * time.Millisecond)
-		cancel()
-	}()
-
-	start := time.Now()
-	_, err := GetObjects[Post](
-		client,
-		ctx,
-		srv.URL+"/posts?project_id=1",
-		1,
-		20,
-	)
-	require.Error(t, err)
-	assert.ErrorIs(t, err, context.Canceled)
-	assert.Less(
-		t,
-		time.Since(start),
-		time.Second,
-		"cancellation should abort the backoff wait promptly",
-	)
-}
-
 func TestNewClient_RateLimiter(t *testing.T) {
 	c, err := NewClient("t", time.Second, 4, 20, 250*time.Millisecond, 5)
 	require.NoError(t, err)
-	assert.NotNil(t, c.limiter)
-	assert.Equal(t, 5, c.maxRetries)
+	tr := c.httpClient.Transport.(*rateLimitRetryTransport)
+	assert.NotNil(t, tr.limiter)
+	assert.Equal(t, 5, tr.maxRetries)
 
 	// Zero delay disables client-side rate limiting.
 	c, err = NewClient("t", time.Second, 4, 20, 0, 0)
 	require.NoError(t, err)
-	assert.Nil(t, c.limiter)
+	tr = c.httpClient.Transport.(*rateLimitRetryTransport)
+	assert.Nil(t, tr.limiter)
 
 	_, err = NewClient("t", time.Second, 4, 20, -1, 0)
 	require.Error(t, err)
@@ -385,12 +328,56 @@ func TestNewClient_RateLimiter(t *testing.T) {
 }
 
 func newTestClient(srv *httptest.Server) *Client {
+	return newTestClientTransport(srv, newRateLimitRetryTransport(
+		srv.Client().Transport, nil, 0, time.Millisecond,
+	))
+}
+
+func newTestClientTransport(
+	srv *httptest.Server, tr *rateLimitRetryTransport,
+) *Client {
+	hc := &http.Client{Transport: tr}
+	rk, err := restkit.New(
+		srv.URL,
+		restkit.WithName("sponsr"),
+		restkit.WithHTTPClient(hc),
+		restkit.WithHook(bearerAuthHook("test-token")),
+	)
+	if err != nil {
+		panic(err)
+	}
 	return &Client{
-		bearerToken:      "test-token",
-		httpClient:       srv.Client(),
+		rk:               rk,
+		httpClient:       hc,
 		concurrencyLimit: 4,
 		paginatorLimit:   20,
-		// Keep backoff tiny so retry tests stay fast.
-		retryBaseDelay: time.Millisecond,
 	}
+}
+
+func TestGetObjects_SendsAuthAndMergesQuery(t *testing.T) {
+	var gotAuth, gotPage, gotLimit, gotProject string
+	srv := httptest.NewServer(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotAuth = r.Header.Get("Authorization")
+			gotPage = r.URL.Query().Get("page")
+			gotLimit = r.URL.Query().Get("limit")
+			gotProject = r.URL.Query().Get("project_id")
+			_ = json.NewEncoder(w).
+				Encode(Objects[Post]{Total: 0, List: nil, Page: 1, Limit: 20})
+		}),
+	)
+	defer srv.Close()
+
+	_, err := GetObjects[Post](
+		newTestClient(srv),
+		context.Background(),
+		"/posts?project_id=7",
+		3,
+		20,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "Bearer test-token", gotAuth)
+	assert.Equal(t, "3", gotPage)
+	assert.Equal(t, "20", gotLimit)
+	assert.Equal(t, "7", gotProject)
 }
