@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 )
 
 const (
@@ -86,12 +87,43 @@ func sanitizeTitle(s string) string {
 	return s
 }
 
+// nameMax is the maximum length, in bytes, of a single path component
+// on the filesystems we target (ext4, APFS, HFS+ all cap a name at 255
+// bytes). maxSuffixBytes is the longest extension chain the manager
+// appends to a Filename() result: the checksum sidecar is
+// "<name>.pdf.json" / "<name>.mp4.json" (9 bytes), which is longer than
+// the ".pdf"/".mp4" output file itself. Reserving that headroom here
+// keeps every derived path within the limit. This matters for UTF-8
+// titles: Cyrillic runs ~2 bytes/rune, so a ~120-rune title already
+// overflows even though it is well under 255 characters.
+const (
+	nameMax          = 255
+	maxSuffixBytes   = len(".pdf.json")
+	maxFilenameBytes = nameMax - maxSuffixBytes
+)
+
+// truncateToBytes returns the longest prefix of s that fits in n bytes
+// without splitting a UTF-8 rune, with any trailing space trimmed so a
+// cut mid-title does not leave a dangling separator.
+func truncateToBytes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	// Back up off any continuation bytes so the prefix ends on a rune
+	// boundary (s[:n] is valid iff s[n] starts a rune or n == len(s)).
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return strings.TrimRight(s[:n], " ")
+}
+
 func (p *Post) Filename() string {
-	return fmt.Sprintf(
+	name := fmt.Sprintf(
 		"%s - %s",
 		p.Date.Format("02-01-2006"),
 		sanitizeTitle(p.Title),
 	)
+	return truncateToBytes(name, maxFilenameBytes)
 }
 
 type Project struct {
