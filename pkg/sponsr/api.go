@@ -44,6 +44,13 @@ func (p *Post) String() string {
 	return p.Title
 }
 
+// FullTitle returns the raw, untruncated post title. Filename() caps its
+// output to stay within the filesystem limit; this exposes the complete
+// title so the checksum sidecar can record it for provenance.
+func (p *Post) FullTitle() string {
+	return p.Title
+}
+
 func (p *Post) URL() string {
 	return fmt.Sprintf(
 		"%s/%d/%d",

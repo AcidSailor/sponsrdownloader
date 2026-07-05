@@ -2,6 +2,7 @@ package manager
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -14,11 +15,21 @@ import (
 
 type fakeItem struct {
 	filename  string
+	fullTitle string
 	updatedAt time.Time
 }
 
-func (f fakeItem) URL() string          { return "http://example" }
-func (f fakeItem) Filename() string     { return f.filename }
+func (f fakeItem) URL() string      { return "http://example" }
+func (f fakeItem) Filename() string { return f.filename }
+
+// FullTitle falls back to filename so existing tests that only set
+// filename still report a sensible title.
+func (f fakeItem) FullTitle() string {
+	if f.fullTitle != "" {
+		return f.fullTitle
+	}
+	return f.filename
+}
 func (f fakeItem) IsAvailable() bool    { return true }
 func (f fakeItem) UpdatedAt() time.Time { return f.updatedAt }
 
@@ -161,6 +172,35 @@ func TestDownloadFailsOnEmptyOutput(t *testing.T) {
 	assert.NoFileExists(t,
 		newFileMeta(time.Time{},
 			filepath.Join(dir, "post.pdf")).metaPath())
+}
+
+// The full, untruncated title is recorded in the sidecar JSON even when
+// the on-disk filename is a length-capped stand-in, so a truncated file
+// can be traced back to its post.
+func TestDownloadRecordsFullTitle(t *testing.T) {
+	dir := t.TempDir()
+	m := &Manager{outputPath: dir}
+	item := fakeItem{
+		filename:  "23-01-2026 - truncated stand-in",
+		fullTitle: "23-01-2026 - the full untruncated post title",
+		updatedAt: time.Date(2026, 1, 23, 0, 0, 0, 0, time.UTC),
+	}
+
+	inner := func(_ context.Context, _ Downloadable, path string) error {
+		return os.WriteFile(path, []byte("data"), 0o644)
+	}
+	require.NoError(t, m.download(context.Background(), item, downloadReq{
+		ext:          "pdf",
+		downloadFunc: inner,
+	}))
+
+	metaPath := newFileMeta(time.Time{},
+		filepath.Join(dir, item.filename+".pdf")).metaPath()
+	data, err := os.ReadFile(metaPath)
+	require.NoError(t, err)
+	var got fileMeta
+	require.NoError(t, json.Unmarshal(data, &got))
+	assert.Equal(t, item.fullTitle, got.Title)
 }
 
 // Corrupt existing metadata must not cause a skip: upToDate returns an

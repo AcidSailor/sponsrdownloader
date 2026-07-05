@@ -48,6 +48,7 @@ var _ Downloadable = (*sponsr.Post)(nil)
 type Downloadable interface {
 	URL() string
 	Filename() string
+	FullTitle() string
 	IsAvailable() bool
 	UpdatedAt() time.Time
 }
@@ -197,6 +198,9 @@ func (m *Manager) download(
 	)
 	logger := slog.With("filename", item.Filename())
 	fm := newFileMeta(item.UpdatedAt(), outputPath)
+	// Preserve the full, untruncated title so a length-capped on-disk
+	// filename can still be traced back to its post.
+	fm.Title = item.FullTitle()
 
 	if fm.UpdatedAt.IsZero() {
 		logger.Warn("no updated_at from API; edit-detection disabled")
