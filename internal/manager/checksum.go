@@ -74,12 +74,17 @@ func metaPathFor(pathToFile string) string {
 }
 
 // fileMeta bundles one output file's path with what we record about it:
-// the post's edit time (server change-signal) and the file's crc32c
-// (integrity). The metadata is stored as JSON at pathToMeta, beside the
-// output under .checksums/. pathToMeta is a *string so a fileMeta built
-// only to read existing metadata can share a known path without
-// recomputing it; nil means "derive it from pathToFile".
+// the post's full title (provenance), its edit time (server
+// change-signal) and the file's crc32c (integrity). The title is the
+// untruncated post title, so a length-capped on-disk filename can still
+// be traced back to its post; it is informational only and plays no
+// part in the up-to-date check. The metadata is stored as JSON at
+// pathToMeta, beside the output under .checksums/. pathToMeta is a
+// *string so a fileMeta built only to read existing metadata can share
+// a known path without recomputing it; nil means "derive it from
+// pathToFile".
 type fileMeta struct {
+	Title      string    `json:"title,omitempty"`
 	UpdatedAt  time.Time `json:"updated_at"`
 	CRC32      crc32c    `json:"crc32"`
 	pathToFile string
