@@ -21,7 +21,7 @@ tasks:
   test:
     desc: Run tests
     cmds:
-      - go test ./...
+      - go test -race ./...
 
   check:
     desc: Local composite — lint (mutating) + tests
@@ -30,6 +30,16 @@ tasks:
       - task: test
 
   build:
-    desc: Snapshot release build
+    desc: Local snapshot build (all platforms)
     cmds:
       - goreleaser release --snapshot --clean
+
+  release:
+    desc: Tagged release via GoReleaser (CI)
+    cmds:
+      - goreleaser release --clean
+
+  update:
+    desc: Pull latest go-scaffolds v1 template tooling (3-way merge; source untouched)
+    cmds:
+      - uvx copier update --vcs-ref v1
