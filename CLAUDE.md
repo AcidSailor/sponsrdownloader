@@ -8,18 +8,26 @@ CLI tool that downloads posts from [sponsr.ru](https://sponsr.ru) as PDFs (and o
 
 ## Commands
 
-Tasks are defined in `taskfile.yml` (requires [Task](https://taskfile.dev)):
+Tasks are defined in `taskfile.yaml` (requires [Task](https://taskfile.dev)):
 
 - `task run -- <args>` — run the CLI (`go run ./cmd/ <args>`)
-- `task test` — `go test ./...`
+- `task test` — `go test -race ./...`
 - `task lint` — format + lint **with autofix** (mutates files: `golangci-lint fmt` + `run --fix`)
 - `task ci` — read-only fmt/lint verification, fail-fast (what CI runs; no mutation)
 - `task check` — local composite: `lint` (mutating) then `test`
 - `task build` — snapshot release build via `goreleaser release --snapshot --clean`
+- `task release` — tagged release via `goreleaser release --clean` (CI)
+- `task update` — pull latest `go-scaffolds` v1 template tooling (`uvx copier update --vcs-ref v1`)
 
 Run a single test: `go test ./pkg/sponsr/ -run TestName`
 
 Formatting is enforced by `golangci-lint fmt` using **gofumpt (extra-rules)** and **golines with `max-len: 80`** (see `.golangci.yaml`). Keep lines ≤80 chars; the CI `task ci` step fails on any fmt diff.
+
+## Template (Copier)
+
+This repo is adopted onto the [go-scaffolds](https://github.com/acidsailor/go-scaffolds) `go-cli` (kong) Copier template; `.copier-answers.yml` records the link. `task update` pulls the latest `v1` template *tooling* (taskfiles, `.golangci.yaml`, workflow stubs, dependabot, `.gitignore`) via a 3-way merge; business source, `go.mod`, and `README.md` are seed-once and never re-rendered. CI/release run through the template's **reusable** workflows (`go-ci.yml`/`go-release.yml@v1`), so `.github/workflows/{ci,release}.yml` are thin callers and the concrete commands live in this taskfile.
+
+**Intentional local overrides** (diverge from the pristine template, preserved across updates as long as the template doesn't touch them): `Dockerfile.goreleaser` (bakes Playwright + ffmpeg), `.goreleaser.yaml` (`main: ./cmd/`), and the taskfile `run`/`check` tasks. If the template ever changes one of these, `copier update` surfaces a conflict to resolve by hand.
 
 ## Runtime dependencies
 

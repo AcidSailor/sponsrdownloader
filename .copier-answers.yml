@@ -1,0 +1,11 @@
+# Changes here will be overwritten by Copier; NEVER EDIT MANUALLY.
+_commit: v1.2.0
+_src_path: gh:acidsailor/go-scaffolds
+author: Denis Shaporov / acidsailor
+author_email: d@shaporov.dev
+cli_framework: kong
+go_version: '1.26'
+module_path: github.com/acidsailor/sponsrdownloader
+project_name: sponsrdownloader
+project_type: cli
+
