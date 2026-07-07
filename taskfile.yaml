@@ -40,6 +40,6 @@ tasks:
       - goreleaser release --clean
 
   update:
-    desc: Pull latest go-scaffolds v1 template tooling (3-way merge; source untouched)
+    desc: Pull latest go-scaffolds v1 template tooling (3-way merge; source untouched; no prompts)
     cmds:
-      - uvx copier update --vcs-ref v1
+      - uvx copier update --defaults --vcs-ref v1
