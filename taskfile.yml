@@ -2,15 +2,9 @@ version: "3"
 
 tasks:
   run:
-<<<<<<< before updating
     desc: Run the CLI with forwarded args
     cmds:
       - go run ./cmd/ {{.CLI_ARGS}}
-=======
-    desc: Run sponsrdownloader
-    cmds:
-      - go run .
->>>>>>> after updating
 
   lint:
     desc: Run formatters + linters with autofix (mutates files)
@@ -45,8 +39,6 @@ tasks:
     cmds:
       - goreleaser release --clean
 
-<<<<<<< before updating
-=======
   release-plan:
     desc: Preview the next release version from conventional commits (svu; read-only)
     silent: true
@@ -65,7 +57,6 @@ tasks:
         git push origin "$next"
         echo "pushed $next → CI will build the release"
 
->>>>>>> after updating
   update:
     desc: Pull latest go-scaffolds v1 template tooling (3-way merge; source untouched; no prompts)
     cmds:
