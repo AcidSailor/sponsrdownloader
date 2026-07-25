@@ -29,6 +29,7 @@ go.work.sum
 # Task runner cache
 /.task/
 
-# Local agent tooling
-/.claude/
+# Local agent tooling (keep committed skills, ignore worktrees/settings)
+/.claude/*
+!/.claude/skills/
 /.worktrees/
