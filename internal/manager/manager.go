@@ -13,7 +13,7 @@ import (
 
 	"github.com/acidsailor/sponsrdownloader/internal/configuration"
 	"github.com/acidsailor/sponsrdownloader/pkg/sponsr"
-	"github.com/playwright-community/playwright-go"
+	"github.com/mxschmitt/playwright-go"
 )
 
 const (
