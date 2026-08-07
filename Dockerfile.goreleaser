@@ -1,9 +1,9 @@
 FROM golang:1.26-bookworm AS playwright-installer
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-# KEEP IN SYNC with the playwright-go version in go.mod (currently v0.6000.0).
+# KEEP IN SYNC with the playwright-go version in go.mod (currently v0.6100.0).
 # A mismatch makes the app re-download the driver/browser at runtime.
-RUN go run github.com/playwright-community/playwright-go/cmd/playwright@v0.6000.0 install --with-deps chromium
+RUN go run github.com/mxschmitt/playwright-go/cmd/playwright@v0.6100.0 install --with-deps chromium
 
 
 FROM debian:bookworm-slim
@@ -42,8 +42,8 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 # $HOME/.cache fallback), so pointing it at the pre-baked driver makes
 # playwright.Install() a no-op regardless of HOME / --user, instead of a ~130 MB
 # download on every run. The versioned subdir is the playwright CLI version
-# (1.60.0 for playwright-go v0.6000.0) — keep it in sync with go.mod.
-ENV PLAYWRIGHT_DRIVER_PATH=/opt/pw-cache/ms-playwright-go/1.60.0
+# (1.61.1 for playwright-go v0.6100.0) — keep it in sync with go.mod.
+ENV PLAYWRIGHT_DRIVER_PATH=/opt/pw-cache/ms-playwright-go/1.61.1
 COPY --from=playwright-installer /ms-playwright /ms-playwright
 COPY --from=playwright-installer /root/.cache/ms-playwright-go /opt/pw-cache/ms-playwright-go
 RUN chown -R appuser:appuser /ms-playwright \
