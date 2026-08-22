@@ -224,7 +224,8 @@ func (m *Manager) download(
 	if err != nil {
 		return fmt.Errorf(
 			"%w: record %s %q: %w",
-			ErrManager, req.ext, item.Filename(), err)
+			ErrManager, req.ext, item.Filename(), err,
+		)
 	}
 	if recorded {
 		logger.Info("downloaded " + req.ext)
