@@ -46,7 +46,8 @@ func TestFileMetaRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	out := filepath.Join(dir, "post.pdf")
 	in := newFileMeta(
-		time.Date(2026, 6, 29, 18, 1, 55, 0, time.UTC), out)
+		time.Date(2026, 6, 29, 18, 1, 55, 0, time.UTC), out,
+	)
 	in.CRC32 = 0x1a2b3c4d
 	require.NoError(t, in.write())
 
@@ -62,7 +63,8 @@ func TestMetaJSONIsHex(t *testing.T) {
 	dir := t.TempDir()
 	out := filepath.Join(dir, "post.pdf")
 	fm := newFileMeta(
-		time.Date(2026, 6, 29, 18, 1, 55, 0, time.UTC), out)
+		time.Date(2026, 6, 29, 18, 1, 55, 0, time.UTC), out,
+	)
 	fm.CRC32 = 0x1a2b3c4d
 	require.NoError(t, fm.write())
 
@@ -148,7 +150,8 @@ func TestFileMetaUpToDate(t *testing.T) {
 	t.Run("crc mismatch -> false", func(t *testing.T) {
 		dir := t.TempDir()
 		out := writeFileWithMeta(
-			t, dir, "post.pdf", "data", updated, 0xdeadbeef)
+			t, dir, "post.pdf", "data", updated, 0xdeadbeef,
+		)
 
 		ok, err := newFileMeta(updated, out).upToDate()
 		require.NoError(t, err)
