@@ -95,8 +95,8 @@ func TestGetObjects(t *testing.T) {
 	defer srv.Close()
 
 	got, err := GetObjects[Post](
-		newTestClient(srv),
 		context.Background(),
+		newTestClient(srv),
 		"/posts?project_id=1",
 		1,
 		20,
@@ -141,8 +141,8 @@ func TestGetObjectsAll_Pagination(t *testing.T) {
 	client.paginatorLimit = limit
 
 	got, err := GetObjectsAll[Post](
-		client,
 		context.Background(),
+		client,
 		"/posts?project_id=1",
 	)
 	require.NoError(t, err)
@@ -158,8 +158,8 @@ func TestGetObjects_HTTPError(t *testing.T) {
 	defer srv.Close()
 
 	_, err := GetObjects[Post](
-		newTestClient(srv),
 		context.Background(),
+		newTestClient(srv),
 		"/posts?project_id=1",
 		1,
 		20,
@@ -182,8 +182,8 @@ func TestGetObjects_429ExhaustsRetries(t *testing.T) {
 	))
 
 	_, err := GetObjects[Post](
-		client,
 		context.Background(),
+		client,
 		"/posts?project_id=1",
 		1,
 		20,
@@ -217,8 +217,8 @@ func TestGetObjects_RecoversAfter429(t *testing.T) {
 	))
 
 	got, err := GetObjects[Post](
-		client,
 		context.Background(),
+		client,
 		"/posts?project_id=1",
 		1,
 		20,
@@ -247,8 +247,8 @@ func TestGetObjects_OmitsRequestBody(t *testing.T) {
 	defer srv.Close()
 
 	_, err := GetObjects[Post](
-		newTestClient(srv),
 		context.Background(),
+		newTestClient(srv),
 		"/posts?project_id=1",
 		1,
 		20,
@@ -283,8 +283,8 @@ func TestGetObjectsAll_RateLimiterSpacesRequests(t *testing.T) {
 	))
 
 	_, err := GetObjectsAll[Post](
-		client,
 		context.Background(),
+		client,
 		"/posts?project_id=1",
 	)
 	require.NoError(t, err)
@@ -369,8 +369,8 @@ func TestGetObjects_SendsAuthAndMergesQuery(t *testing.T) {
 	defer srv.Close()
 
 	_, err := GetObjects[Post](
-		newTestClient(srv),
 		context.Background(),
+		newTestClient(srv),
 		"/posts?project_id=7",
 		3,
 		20,

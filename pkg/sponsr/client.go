@@ -109,7 +109,7 @@ func CalculatePages(total, limit int) int {
 }
 
 func GetObjects[T any](
-	s *Client, ctx context.Context, objectPath string,
+	ctx context.Context, s *Client, objectPath string,
 	page, limit int,
 ) (*Objects[T], error) {
 	objs, err := restkit.Do[Objects[T]](
@@ -128,12 +128,12 @@ func GetObjects[T any](
 }
 
 func GetObjectsAll[T any](
-	s *Client,
 	ctx context.Context,
+	s *Client,
 	objectPath string,
 ) ([]T, error) {
 	// Fetch page 1 at full limit so its data is reused directly.
-	firstPage, err := GetObjects[T](s, ctx, objectPath, 1, s.paginatorLimit)
+	firstPage, err := GetObjects[T](ctx, s, objectPath, 1, s.paginatorLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +159,7 @@ func GetObjectsAll[T any](
 
 	for p := 2; p <= pages; p++ {
 		eg.Go(func() error {
-			resp, err := GetObjects[T](s, ctx, objectPath, p, s.paginatorLimit)
+			resp, err := GetObjects[T](ctx, s, objectPath, p, s.paginatorLimit)
 			if err != nil {
 				return err
 			}
@@ -253,14 +253,14 @@ func (s *Client) Projects(
 	projectID int,
 ) ([]Project, error) {
 	return GetObjectsAll[Project](
-		s, ctx,
+		ctx, s,
 		fmt.Sprintf("%s?id=%d", ProjectsPath, projectID),
 	)
 }
 
 func (s *Client) Posts(ctx context.Context, projectID int) ([]Post, error) {
 	return GetObjectsAll[Post](
-		s, ctx,
+		ctx, s,
 		fmt.Sprintf("%s?project_id=%d", PostsPath, projectID),
 	)
 }
