@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/acidsailor/restkit v0.3.0
-	github.com/alecthomas/kong v1.16.1
+	github.com/alecthomas/kong v1.17.0
 	github.com/mxschmitt/playwright-go v0.6201.1
 	github.com/stretchr/testify v1.12.1
 	golang.org/x/sync v0.24.0
