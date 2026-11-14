@@ -3,7 +3,7 @@ FROM golang:1.26-bookworm AS playwright-installer
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 # KEEP IN SYNC with the playwright-go version in go.mod (enforced by
 # cmd/dockerfile_test.go). A mismatch fails playwright.Install() at runtime.
-RUN go run github.com/mxschmitt/playwright-go/cmd/playwright@v0.6201.1 install --with-deps chromium \
+RUN go run github.com/mxschmitt/playwright-go/cmd/playwright@v0.6401.0 install --with-deps chromium \
     && mv /root/.cache/ms-playwright-go/* /opt/pw-driver
 
 
